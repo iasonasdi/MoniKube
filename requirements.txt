@@ -1,0 +1,22 @@
+# Kubernetes Monitor Dependencies
+# Core dependencies for Kubernetes monitoring
+
+# PyYAML for YAML parsing (kubectl output sometimes uses YAML)
+PyYAML>=6.0
+
+# Optional: For enhanced JSON handling and data processing
+# (The script uses built-in json module, but these can be useful for extensions)
+# pandas>=1.5.0
+# numpy>=1.21.0
+
+# Optional: For advanced logging and monitoring
+# prometheus-client>=0.14.0
+
+# Optional: For web dashboard (if you want to extend the monitor)
+# flask>=2.0.0
+# flask-cors>=3.0.0
+
+# Note: This script primarily uses subprocess to call kubectl commands
+# and built-in Python modules (json, logging, datetime, dataclasses)
+# The main requirement is having kubectl installed and configured
+# to access your Kubernetes clusters.
