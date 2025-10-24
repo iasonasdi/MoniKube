@@ -4,6 +4,12 @@
 # PyYAML for YAML parsing (kubectl output sometimes uses YAML)
 PyYAML>=6.0
 
+# Neo4J database driver for graph database storage
+neo4j>=5.0.0
+
+# Network interface detection for VM identification
+netifaces>=0.11.0
+
 # Optional: For enhanced JSON handling and data processing
 # (The script uses built-in json module, but these can be useful for extensions)
 # pandas>=1.5.0
@@ -20,3 +26,8 @@ PyYAML>=6.0
 # and built-in Python modules (json, logging, datetime, dataclasses)
 # The main requirement is having kubectl installed and configured
 # to access your Kubernetes clusters.
+# 
+# For Neo4J functionality, you need:
+# 1. Neo4J database server running
+# 2. neo4j Python driver (included in requirements)
+# 3. Network access to Neo4J server

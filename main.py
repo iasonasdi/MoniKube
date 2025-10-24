@@ -10,23 +10,53 @@ import signal
 import sys
 from datetime import datetime
 from kubernetes_monitor import KubernetesMonitor
+from neo4j_handler import Neo4JHandler
 
 
 class MonitoringController:
     """Controller class to handle monitoring with timing and iteration control"""
     
-    def __init__(self):
+    def __init__(self, neo4j_config=None):
         self.monitor = KubernetesMonitor()
         self.running = True
+        self.neo4j_handler = None
+        self.neo4j_config = neo4j_config
         
         # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Initialize Neo4J if configured
+        if neo4j_config:
+            self._initialize_neo4j()
     
     def _signal_handler(self, signum, frame):
         """Handle interrupt signals for graceful shutdown"""
         print(f"\n\nReceived signal {signum}. Shutting down gracefully...")
         self.running = False
+        if self.neo4j_handler:
+            self.neo4j_handler.disconnect()
+    
+    def _initialize_neo4j(self):
+        """Initialize Neo4J connection"""
+        try:
+            self.neo4j_handler = Neo4JHandler(
+                uri=self.neo4j_config['uri'],
+                username=self.neo4j_config['username'],
+                password=self.neo4j_config['password'],
+                database=self.neo4j_config.get('database', 'neo4j')
+            )
+            
+            if self.neo4j_handler.connect():
+                self.neo4j_handler.create_schema()
+                print("✅ Neo4J connection established and schema created")
+            else:
+                print("❌ Failed to connect to Neo4J database")
+                self.neo4j_handler = None
+                
+        except Exception as e:
+            print(f"❌ Neo4J initialization failed: {e}")
+            self.neo4j_handler = None
     
     def run_monitoring_cycle(self, cycle_num=None):
         """Run a single monitoring cycle"""
@@ -83,6 +113,22 @@ class MonitoringController:
             
             print(f"\n{'='*60}")
             
+            # Store data in Neo4J if configured
+            if self.neo4j_handler:
+                try:
+                    # Get current context
+                    contexts = self.monitor.get_available_contexts()
+                    current_context = contexts[0] if contexts else "default"
+                    
+                    # Store monitoring data
+                    if self.neo4j_handler.store_monitoring_data(self.monitor, current_context):
+                        print("💾 Data stored in Neo4J database")
+                    else:
+                        print("⚠️  Failed to store data in Neo4J")
+                        
+                except Exception as e:
+                    print(f"⚠️  Neo4J storage error: {e}")
+            
         except Exception as e:
             print(f"❌ Error during monitoring cycle: {e}")
             self.monitor.logger.error(f"Monitoring cycle error: {e}")
@@ -136,6 +182,11 @@ Examples:
   python main.py -t 30 -n 5        # Run 5 times, every 30 seconds
   python main.py -n 0               # Run continuously (same as no args)
   python main.py -t 60 -n 1        # Run once, wait 60 seconds (single report)
+  
+  # With Neo4J database storage:
+  python main.py -db                # Store data in Neo4J (default settings)
+  python main.py -db -t 30          # Store data every 30 seconds
+  python main.py -db --neo4j-uri bolt://neo4j-server:7687 --neo4j-username admin --neo4j-password secret
         """
     )
     
@@ -151,6 +202,37 @@ Examples:
         type=int,
         default=0,
         help='Number of monitoring cycles to run (0 = continuous, default: 0)'
+    )
+    
+    # Neo4J database options
+    parser.add_argument(
+        '-db', '--database',
+        action='store_true',
+        help='Enable Neo4J database storage'
+    )
+    
+    parser.add_argument(
+        '--neo4j-uri',
+        default='bolt://localhost:7687',
+        help='Neo4J database URI (default: bolt://localhost:7687)'
+    )
+    
+    parser.add_argument(
+        '--neo4j-username',
+        default='neo4j',
+        help='Neo4J username (default: neo4j)'
+    )
+    
+    parser.add_argument(
+        '--neo4j-password',
+        default='password',
+        help='Neo4J password (default: password)'
+    )
+    
+    parser.add_argument(
+        '--neo4j-database',
+        default='neo4j',
+        help='Neo4J database name (default: neo4j)'
     )
     
     return parser.parse_args()
@@ -172,8 +254,21 @@ def main():
         print("❌ Error: Number of iterations cannot be negative")
         sys.exit(1)
     
+    # Prepare Neo4J configuration if database option is enabled
+    neo4j_config = None
+    if args.database:
+        neo4j_config = {
+            'uri': args.neo4j_uri,
+            'username': args.neo4j_username,
+            'password': args.neo4j_password,
+            'database': args.neo4j_database
+        }
+        print("🗄️  Neo4J database storage enabled")
+        print(f"   URI: {neo4j_config['uri']}")
+        print(f"   Database: {neo4j_config['database']}")
+    
     # Initialize controller
-    controller = MonitoringController()
+    controller = MonitoringController(neo4j_config)
     
     # Check if kubectl is available
     contexts = controller.monitor.get_available_contexts()
