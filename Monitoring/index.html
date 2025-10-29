@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neo4j Graph Visualization - CYBERNEMO</title>
+    
+    <!-- vis-network for graph visualization -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network@latest/standalone/umd/vis-network.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/vis-network@latest/dist/vis-network.min.css">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        .sidebar {
+            width: 350px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            color: white;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .graph-container {
+            height: calc(100vh - 80px);
+            flex: 1;
+            position: relative;
+            background: white;
+        }
+
+        .sidebar h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 22px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .status-indicator {
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            margin-bottom: 15px;
+        }
+
+        .status-connected {
+            background: #48bb78;
+            color: white;
+        }
+
+        .status-disconnected {
+            background: #f56565;
+            color: white;
+        }
+
+        .legend {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #f7fafc;
+            border-radius: 8px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        .stats {
+            margin-bottom: 25px;
+        }
+
+        .stat-item {
+            padding: 10px;
+            background: #f7fafc;
+            margin-bottom: 8px;
+            border-radius: 5px;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .stat-label {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .stat-value {
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .button:active {
+            transform: translateY(0);
+        }
+
+        .details-panel {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f7fafc;
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .details-panel h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .property-item {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: white;
+            border-left: 3px solid #667eea;
+            border-radius: 4px;
+        }
+
+        .property-label {
+            font-weight: 600;
+            color: #333;
+            font-size: 12px;
+        }
+
+        .property-value {
+            color: #666;
+            font-size: 13px;
+            word-wrap: break-word;
+        }
+
+        .loader {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
+
+        .loader.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .filter-input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .filter-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .node-info {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 15px;
+        }
+
+        .node-info h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .node-info p {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        #mygraph {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <h2>🔮 Neo4j Monitor</h2>
+            
+            <div id="statusIndicator" class="status-indicator status-disconnected">
+                Disconnected
+            </div>
+
+            <div class="legend">
+                <h3 style="margin-bottom: 15px; font-size: 16px; color: #333;">Node Types</h3>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FF6B6B;"></div>
+                    <span>VM</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #4ECDC4;"></div>
+                    <span>Cluster</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #45B7D1;"></div>
+                    <span>Node</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #96CEB4;"></div>
+                    <span>Pod</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FECA57;"></div>
+                    <span>Service</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FF9FF3;"></div>
+                    <span>Container</span>
+                </div>
+            </div>
+
+            <div class="stats">
+                <h3 style="margin-bottom: 15px; font-size: 16px; color: #333;">Statistics</h3>
+                <div class="stat-item">
+                    <span class="stat-label">Nodes:</span>
+                    <span class="stat-value" id="nodeCount">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Edges:</span>
+                    <span class="stat-value" id="edgeCount">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Selected:</span>
+                    <span class="stat-value" id="selectedCount">0</span>
+                </div>
+            </div>
+
+            <button class="button" onclick="loadGraph()">🔄 Refresh Graph</button>
+            <button class="button" onclick="resetView()">🎯 Reset View</button>
+            <button class="button" onclick="fitToScreen()">📐 Fit to Screen</button>
+            <button class="button" onclick="exportGraph()">💾 Export JSON</button>
+
+            <input type="text" class="filter-input" id="searchInput" placeholder="🔍 Search nodes..." onkeyup="filterNodes()">
+
+            <!-- Node Details Panel -->
+            <div class="details-panel" id="detailsPanel" style="display: none;">
+                <div class="node-info">
+                    <h3 id="selectedNodeTitle">Node Details</h3>
+                    <p id="selectedNodeId"></p>
+                    <p id="selectedNodeType"></p>
+                    <p id="selectedNodeStatus"></p>
+                    <div id="selectedNodeProperties"></div>
+                </div>
+            </div>
+
+            <div class="loader" id="loader">
+                <div class="spinner"></div>
+                <p>Loading...</p>
+            </div>
+        </div>
+
+        <!-- Main Graph Area -->
+        <div class="main-content">
+            <div class="header">
+                <h1>🗺️ Cluster Graph Visualization</h1>
+                <div style="color: white; font-size: 14px;">
+                    Click on nodes to see details • Drag to pan • Scroll to zoom
+                </div>
+            </div>
+            <div class="graph-container">
+                <div id="mygraph"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let network = null;
+        let data = { nodes: [], edges: [] };
+        let allNodes = [];
+        let allEdges = [];
+        let selectedNode = null;
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            checkHealth();
+            loadGraph();
+        });
+
+        // Check Neo4j connection health
+        async function checkHealth() {
+            try {
+                const response = await fetch('/api/health');
+                const result = await response.json();
+                
+                const statusIndicator = document.getElementById('statusIndicator');
+                if (result.status === 'healthy' && result.neo4j === 'connected') {
+                    statusIndicator.textContent = '✓ Connected';
+                    statusIndicator.className = 'status-indicator status-connected';
+                } else {
+                    statusIndicator.textContent = '✗ Disconnected';
+                    statusIndicator.className = 'status-indicator status-disconnected';
+                }
+            } catch (error) {
+                console.error('Health check failed:', error);
+                const statusIndicator = document.getElementById('statusIndicator');
+                statusIndicator.textContent = '✗ Disconnected';
+                statusIndicator.className = 'status-indicator status-disconnected';
+            }
+        }
+
+        // Load graph data from API
+        async function loadGraph() {
+            showLoader();
+            try {
+                const response = await fetch('/api/graph');
+                const result = await response.json();
+                
+                if (result.error) {
+                    console.error('Error loading graph:', result.error);
+                    alert('Failed to load graph: ' + result.error);
+                    hideLoader();
+                    return;
+                }
+
+                allNodes = result.nodes || [];
+                allEdges = result.edges || [];
+                data = { nodes: result.nodes || [], edges: result.edges || [] };
+                
+                initializeGraph();
+                updateStats();
+                checkHealth();
+                hideLoader();
+            } catch (error) {
+                console.error('Error loading graph:', error);
+                alert('Failed to connect to server. Make sure the Flask app is running.');
+                hideLoader();
+            }
+        }
+
+        // Initialize vis.js graph
+        function initializeGraph() {
+            const container = document.getElementById('mygraph');
+            const options = {
+                nodes: {
+                    shape: 'dot',
+                    size: 20,
+                    font: {
+                        size: 12,
+                        color: '#000',
+                        face: 'Tahoma'
+                    },
+                    borderWidth: 2,
+                    shadow: true
+                },
+                edges: {
+                    width: 2,
+                    color: { inherit: 'from' },
+                    smooth: {
+                        type: 'continuous',
+                        roundness: 0.5
+                    },
+                    arrows: {
+                        to: {
+                            enabled: true,
+                            scaleFactor: 1
+                        }
+                    }
+                },
+                physics: {
+                    enabled: true,
+                    stabilization: {
+                        enabled: true,
+                        iterations: 100
+                    },
+                    barnesHut: {
+                        gravitationalConstant: -30000,
+                        centralGravity: 0.3,
+                        springLength: 100,
+                        springConstant: 0.01,
+                        damping: 0.09
+                    }
+                },
+                interaction: {
+                    tooltipDelay: 200,
+                    hideEdgesOnDrag: true,
+                    hideEdgesOnZoom: true,
+                    tooltipStyle: {
+                        cssClass: 'vis-tooltip-custom',
+                        padding: '10px',
+                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                        fontSize: '14px',
+                        fontFamily: 'Arial, sans-serif',
+                        whiteSpace: 'pre-line'
+                    }
+                }
+            };
+
+            if (network) {
+                network.destroy();
+            }
+
+            network = new vis.Network(container, data, options);
+
+            // Event listeners
+            network.on('click', function(params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    showNodeDetails(nodeId);
+                    selectedNode = nodeId;
+                    document.getElementById('selectedCount').textContent = '1';
+                } else {
+                    hideNodeDetails();
+                    document.getElementById('selectedCount').textContent = '0';
+                }
+            });
+
+            network.on('select', function(params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    showNodeDetails(nodeId);
+                }
+            });
+
+            network.on('deselectNode', function() {
+                hideNodeDetails();
+                document.getElementById('selectedCount').textContent = '0';
+            });
+
+            network.on('stabilizationEnd', function() {
+                hideLoader();
+            });
+        }
+
+        // Show node details in sidebar
+        async function showNodeDetails(nodeId) {
+            try {
+                const response = await fetch(`/api/node/${encodeURIComponent(nodeId)}`);
+                const result = await response.json();
+                
+                if (result.error) {
+                    console.error('Error fetching node details:', result.error);
+                    return;
+                }
+
+                // Display in details panel
+                const panel = document.getElementById('detailsPanel');
+                const title = document.getElementById('selectedNodeTitle');
+                const nodeIdElement = document.getElementById('selectedNodeId');
+                const nodeType = document.getElementById('selectedNodeType');
+                const nodeStatus = document.getElementById('selectedNodeStatus');
+                const properties = document.getElementById('selectedNodeProperties');
+
+                panel.style.display = 'block';
+                title.textContent = `${result.type || 'Node'}: ${result.properties.name || nodeId}`;
+                nodeIdElement.textContent = `ID: ${nodeId}`;
+                nodeType.textContent = `Type: ${result.labels?.join(', ') || 'Unknown'}`;
+                nodeStatus.textContent = result.properties.status ? `Status: ${result.properties.status}` : '';
+
+                // Display all properties
+                properties.innerHTML = '';
+                for (const [key, value] of Object.entries(result.properties)) {
+                    const propDiv = document.createElement('div');
+                    propDiv.className = 'property-item';
+                    propDiv.innerHTML = `
+                        <div class="property-label">${key}:</div>
+                        <div class="property-value">${JSON.stringify(value)}</div>
+                    `;
+                    properties.appendChild(propDiv);
+                }
+            } catch (error) {
+                console.error('Error showing node details:', error);
+            }
+        }
+
+        // Hide node details
+        function hideNodeDetails() {
+            document.getElementById('detailsPanel').style.display = 'none';
+            selectedNode = null;
+        }
+
+        // Update statistics
+        function updateStats() {
+            document.getElementById('nodeCount').textContent = data.nodes.length;
+            document.getElementById('edgeCount').textContent = data.edges.length;
+        }
+
+        // Filter nodes based on search input
+        function filterNodes() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            
+            if (!searchTerm) {
+                data.nodes = allNodes;
+                data.edges = allEdges;
+            } else {
+                const filteredNodes = allNodes.filter(node => 
+                    node.label.toLowerCase().includes(searchTerm) ||
+                    node.id.toLowerCase().includes(searchTerm) ||
+                    node.type.toLowerCase().includes(searchTerm)
+                );
+                
+                const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
+                
+                const filteredEdges = allEdges.filter(edge => 
+                    filteredNodeIds.has(edge.from) && filteredNodeIds.has(edge.to)
+                );
+                
+                data.nodes = filteredNodes;
+                data.edges = filteredEdges;
+            }
+            
+            network.setData(data);
+            updateStats();
+        }
+
+        // Reset view
+        function resetView() {
+            if (network) {
+                network.fit();
+            }
+        }
+
+        // Fit to screen
+        function fitToScreen() {
+            if (network) {
+                network.fit();
+            }
+        }
+
+        // Export graph as JSON
+        function exportGraph() {
+            const jsonData = JSON.stringify(data, null, 2);
+            const blob = new Blob([jsonData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'neo4j-graph-export.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Show loader
+        function showLoader() {
+            document.getElementById('loader').classList.add('active');
+        }
+
+        // Hide loader
+        function hideLoader() {
+            document.getElementById('loader').classList.remove('active');
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,13 @@
+# Monitoring Dashboard Requirements
+# Additional dependencies for the visualization dashboard
+
+# Flask web framework for the backend API
+flask>=2.0.0
+flask-cors>=3.0.0
+
+# Neo4j database driver (if not already installed)
+neo4j>=5.0.0
+
+# Environment variable handling (optional)
+python-dotenv>=0.19.0
+

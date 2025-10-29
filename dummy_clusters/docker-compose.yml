@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # Neo4J Database for storing monitoring data
+  neo4j:
+    image: neo4j:5.15-community
+    container_name: cybernemo-neo4j
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - cybernemo-network
+
+  # K3s Kubernetes cluster
+  k3s-server:
+    image: rancher/k3s:latest
+    container_name: cybernemo-k3s
+    privileged: true
+    ports:
+      - "6443:6443"  # Kubernetes API
+      - "8080:8080"  # K3s API
+    environment:
+      - K3S_TOKEN=cybernemo-token
+      - K3S_KUBECONFIG_OUTPUT=/tmp/kubeconfig
+      - K3S_KUBECONFIG_MODE=666
+    volumes:
+      - /var/lib/rancher/k3s:/var/lib/rancher/k3s
+      - /tmp/kubeconfig:/tmp/kubeconfig
+      - ./k8s-manifests:/var/lib/rancher/k3s/server/manifests
+    networks:
+      - cybernemo-network
+    command: server --disable traefik --disable servicelb
+
+  # CYBERNEMO Monitoring Application
+  monitor:
+    build: .
+    container_name: cybernemo-monitor
+    depends_on:
+      - neo4j
+      - k3s-server
+    volumes:
+      - ./kubeconfig:/root/.kube:ro
+      - ./logs:/app/logs
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=password
+      - NEO4J_DATABASE=neo4j
+    networks:
+      - cybernemo-network
+    command: ["python3", "main.py", "-db", "--neo4j-uri", "bolt://neo4j:7687", "--neo4j-username", "neo4j", "--neo4j-password", "password", "-t", "30", "-n", "5"]
+
+  # Sample applications for testing
+  nginx-deployment:
+    image: nginx:alpine
+    container_name: cybernemo-nginx
+    ports:
+      - "80:80"
+    networks:
+      - cybernemo-network
+    depends_on:
+      - k3s-server
+    profiles:
+      - testing
+
+  # Redis for additional testing
+  redis:
+    image: redis:alpine
+    container_name: cybernemo-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - cybernemo-network
+    profiles:
+      - testing
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+
+networks:
+  cybernemo-network:
+    driver: bridge
