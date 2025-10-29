@@ -209,7 +209,7 @@ class Neo4JHandler:
                     self._store_cluster_metrics(tx, monitor, cluster_id)
                     
                     # Create relationships
-                    self._create_relationships(tx, cluster_id, node_ids, pod_ids, service_ids)
+                    self._create_relationships(tx, monitor, cluster_id, node_ids, pod_ids, service_ids)
                     
                     self.logger.info(f"Successfully stored monitoring data for context: {context}")
                     return True
@@ -453,7 +453,7 @@ class Neo4JHandler:
                total_cpu_usage=metrics.total_cpu_usage,
                total_memory_usage=metrics.total_memory_usage)
     
-    def _create_relationships(self, tx, cluster_id: str, node_ids: List[str], 
+    def _create_relationships(self, tx, monitor: KubernetesMonitor, cluster_id: str, node_ids: List[str], 
                            pod_ids: List[str], service_ids: List[str]):
         """Create relationships between entities"""
         
