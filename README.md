@@ -48,12 +48,16 @@ python main.py -t 30 -n 10
 
 # Run once (single report)
 python main.py -t 60 -n 1
+
+# Run with Neo4J storing
+python3 main.py -db -t 30 -n 5
 ```
 
 ### Command Line Options
 
 - `-t, --time`: Time interval between monitoring cycles in seconds (default: 10)
 - `-n, --iterations`: Number of monitoring cycles to run (0 = continuous, default: 0)
+- `-db, --neo4j-uri bolt://neo4j-server:7687 --neo4j-username admin --neo4j-password secret`: Store data in the Neo4J database
 
 ### Examples
 
@@ -73,32 +77,103 @@ python main.py --help
 
 ## 📊 What It Monitors
 
-### Cluster Information
-- Available contexts and cluster versions
-- Basic cluster connectivity and status
+The tool collects comprehensive information about your Kubernetes clusters through `kubectl` commands. All data is collected in JSON format and parsed into structured dataclasses. Here's what information is collected:
 
-### Nodes
-- Node status (Ready/NotReady)
-- Node roles (master, worker, etc.)
-- CPU and memory capacity
-- Resource allocation
+### 1. Cluster-Level Information
+- **Cluster Info**: Basic cluster connectivity and status from `kubectl cluster-info`
+- **Version Information**: Kubernetes version details from `kubectl version`
+- **Available Contexts**: List of all configured Kubernetes contexts
+- **Timestamps**: Each collection includes timestamp information for tracking
 
-### Pods
-- Pod status (Running, Pending, Failed, etc.)
-- Container information (name, image, status)
-- Resource requests and limits
-- Node assignment
+### 2. Node Information
+For each node in the cluster, the following data is collected:
+- **Node Name**: Unique identifier for the node
+- **Status**: Node health status (Ready/NotReady/Unknown) extracted from node conditions
+- **Roles**: Node roles (master, worker, control-plane, etc.) extracted from labels
+- **Resource Capacity**:
+  - CPU capacity (total CPU available on the node)
+  - Memory capacity (total memory available on the node)
+- **Resource Allocatable**:
+  - CPU allocatable (CPU available for pods after system reservations)
+  - Memory allocatable (Memory available for pods after system reservations)
+- **Resource Usage** (requires metrics-server):
+  - Real-time CPU usage percentage
+  - Real-time memory usage percentage
 
-### Services
-- Service types (ClusterIP, NodePort, LoadBalancer)
-- Cluster and external IPs
-- Port configurations
-- Service selectors
+### 3. Pod Information
+For each pod in the cluster, the following data is collected:
 
-### System Metrics (with metrics-server)
-- CPU usage per pod and node
-- Memory usage per pod and node
-- Resource utilization trends
+**Pod-Level Data:**
+- **Pod Name**: Unique identifier for the pod
+- **Namespace**: The namespace where the pod is deployed
+- **Status**: Pod phase (Running, Pending, Failed, Succeeded, Unknown)
+- **Node Assignment**: Which node the pod is scheduled on
+- **Resource Requests** (aggregated across all containers):
+  - Total CPU requests (in millicores)
+  - Total memory requests (in MiB)
+- **Resource Limits** (aggregated across all containers):
+  - Total CPU limits (in millicores)
+  - Total memory limits (in MiB)
+
+**Container-Level Data** (for each container within the pod):
+- **Container Name**: Name of the container
+- **Image**: Container image name and tag
+- **Status**: Container state (extracted from running state, including startedAt timestamp)
+- **Resource Limits**:
+  - CPU limit (if configured)
+  - Memory limit (if configured)
+- **Resource Usage** (requires metrics-server):
+  - Real-time CPU usage
+  - Real-time memory usage
+
+### 4. Service Information
+For each service in the cluster, the following data is collected:
+- **Service Name**: Unique identifier for the service
+- **Namespace**: The namespace where the service is deployed
+- **Service Type**: Type of service (ClusterIP, NodePort, LoadBalancer, ExternalName)
+- **IP Addresses**:
+  - Cluster IP (internal cluster IP address)
+  - External IP (if applicable, for LoadBalancer services)
+- **Port Configuration**: For each port exposed by the service:
+  - Port name (if named)
+  - Port number
+  - Target port (port on the pods)
+  - Protocol (TCP, UDP, etc.)
+- **Selectors**: Label selectors used to match pods
+
+### 5. Resource Usage Metrics
+**Note**: This requires metrics-server to be installed in your cluster. Without it, usage metrics will be `0.0`.
+
+- **Pod Metrics**: Real-time CPU and memory usage for all pods via `kubectl top pods`
+- **Node Metrics**: Real-time CPU and memory usage for all nodes via `kubectl top nodes`
+- **Timestamp**: When the metrics were collected
+
+### 6. Aggregated Cluster Metrics
+The tool also calculates and provides aggregated statistics:
+- **Pod Counts**:
+  - Total pods in the cluster
+  - Running pods count
+  - Pending pods count
+  - Failed pods count
+- **Service Count**: Total number of services
+- **Node Counts**:
+  - Total nodes in the cluster
+  - Ready nodes count (nodes in Ready state)
+- **Resource Usage** (requires metrics-server):
+  - Total CPU usage across the cluster
+  - Total memory usage across the cluster
+
+### Data Collection Methods
+All data is collected through `kubectl` commands executed with JSON output format:
+- `kubectl get nodes -o json`
+- `kubectl get pods -o json`
+- `kubectl get services -o json`
+- `kubectl top pods -o json` (requires metrics-server)
+- `kubectl top nodes -o json` (requires metrics-server)
+- `kubectl cluster-info`
+- `kubectl version`
+
+The collected data is parsed and structured into Python dataclasses (`NodeInfo`, `PodInfo`, `ServiceInfo`, `ContainerInfo`, `ClusterMetrics`) for easy programmatic access and JSON export.
 
 ## 🔧 Advanced Usage
 

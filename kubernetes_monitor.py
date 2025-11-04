@@ -107,13 +107,15 @@ class KubernetesMonitor:
         )
         return logging.getLogger(__name__)
     
-    def _run_kubectl_command(self, command: List[str], namespace: Optional[str] = None) -> Dict[str, Any]:
+    def _run_kubectl_command(self, command: List[str], namespace: Optional[str] = None, json_output: bool = True) -> Dict[str, Any]:
         """
         Execute kubectl command and return JSON output.
         
         Args:
             command: kubectl command as list
             namespace: Optional namespace to target
+            json_output: Whether to request JSON output (default: True)
+                         Some commands like 'top' and 'cluster-info' don't support -o json
             
         Returns:
             Dictionary containing command output
@@ -130,8 +132,10 @@ class KubernetesMonitor:
             if namespace:
                 cmd.extend(['-n', namespace])
             
-            cmd.append('-o')
-            cmd.append('json')
+            # Only add -o json for commands that support it
+            if json_output:
+                cmd.append('-o')
+                cmd.append('json')
             
             self.logger.debug(f"Executing command: {' '.join(cmd)}")
             
@@ -143,7 +147,13 @@ class KubernetesMonitor:
                 timeout=30
             )
             
-            return json.loads(result.stdout)
+            # If JSON output was requested, parse it
+            if json_output:
+                return json.loads(result.stdout)
+            else:
+                # For non-JSON commands, return the raw output as a dict
+                # Some commands like 'top' return tabular data
+                return {'output': result.stdout, 'raw': True}
             
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Kubectl command failed: {e.stderr}")
@@ -173,8 +183,8 @@ class KubernetesMonitor:
     
     def get_cluster_info(self) -> Dict[str, Any]:
         """Get basic cluster information"""
-        cluster_info = self._run_kubectl_command(['cluster-info'])
-        version_info = self._run_kubectl_command(['version'])
+        cluster_info = self._run_kubectl_command(['cluster-info'], json_output=False)
+        version_info = self._run_kubectl_command(['version'], json_output=False)
         
         return {
             'cluster_info': cluster_info,
@@ -393,9 +403,9 @@ class KubernetesMonitor:
         Note: This requires metrics-server to be installed in the cluster.
         """
         try:
-            # Get pod metrics
-            pod_metrics = self._run_kubectl_command(['top', 'pods'], namespace)
-            node_metrics = self._run_kubectl_command(['top', 'nodes'])
+            # Get pod metrics - 'top' command doesn't support -o json
+            pod_metrics = self._run_kubectl_command(['top', 'pods'], namespace, json_output=False)
+            node_metrics = self._run_kubectl_command(['top', 'nodes'], json_output=False)
             
             return {
                 'pod_metrics': pod_metrics,

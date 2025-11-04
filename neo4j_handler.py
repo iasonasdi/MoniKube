@@ -154,6 +154,7 @@ class Neo4JHandler:
             "CREATE INDEX pod_id_index IF NOT EXISTS FOR (p:Pod) ON (p.id)",
             "CREATE INDEX service_id_index IF NOT EXISTS FOR (s:Service) ON (s.id)",
             "CREATE INDEX container_id_index IF NOT EXISTS FOR (ct:Container) ON (ct.id)",
+            "CREATE INDEX resource_usage_cluster_index IF NOT EXISTS FOR (ru:ResourceUsage) ON (ru.cluster_id)",
             
             # Create constraints for uniqueness
             "CREATE CONSTRAINT vm_id_unique IF NOT EXISTS FOR (v:VM) REQUIRE v.id IS UNIQUE",
@@ -161,7 +162,8 @@ class Neo4JHandler:
             "CREATE CONSTRAINT node_id_unique IF NOT EXISTS FOR (n:Node) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT pod_id_unique IF NOT EXISTS FOR (p:Pod) REQUIRE p.id IS UNIQUE",
             "CREATE CONSTRAINT service_id_unique IF NOT EXISTS FOR (s:Service) REQUIRE s.id IS UNIQUE",
-            "CREATE CONSTRAINT container_id_unique IF NOT EXISTS FOR (ct:Container) REQUIRE ct.id IS UNIQUE"
+            "CREATE CONSTRAINT container_id_unique IF NOT EXISTS FOR (ct:Container) REQUIRE ct.id IS UNIQUE",
+            "CREATE CONSTRAINT resource_usage_cluster_unique IF NOT EXISTS FOR (ru:ResourceUsage) REQUIRE ru.cluster_id IS UNIQUE"
         ]
         
         try:
@@ -184,17 +186,27 @@ class Neo4JHandler:
             bool: Success status
         """
         try:
+            # Get resource usage data (if metrics-server is available)
+            resource_usage = monitor.get_resource_usage()
+            
+            # Parse metrics for usage data
+            node_metrics_dict = self._parse_node_metrics(resource_usage.get('node_metrics', {}))
+            pod_metrics_dict = self._parse_pod_metrics(resource_usage.get('pod_metrics', {}))
+            
+            # Get available contexts
+            available_contexts = monitor.get_available_contexts()
+            
             with self.driver.session() as session:
                 # Start transaction
                 with session.begin_transaction() as tx:
                     # Store VM information
                     vm_id = self._store_vm_info(tx)
                     
-                    # Store cluster information
-                    cluster_id = self._store_cluster_info(tx, monitor, context, vm_id)
+                    # Store cluster information (including available contexts)
+                    cluster_id = self._store_cluster_info(tx, monitor, context, vm_id, available_contexts)
                     
-                    # Store nodes
-                    node_ids = self._store_nodes(tx, monitor, cluster_id)
+                    # Store nodes (with actual usage data if available)
+                    node_ids = self._store_nodes(tx, monitor, cluster_id, node_metrics_dict)
                     
                     # Store pods
                     pod_ids = self._store_pods(tx, monitor, cluster_id, node_ids)
@@ -202,11 +214,14 @@ class Neo4JHandler:
                     # Store services
                     service_ids = self._store_services(tx, monitor, cluster_id)
                     
-                    # Store containers
-                    self._store_containers(tx, monitor, pod_ids)
+                    # Store containers (with actual usage data if available)
+                    self._store_containers(tx, monitor, pod_ids, pod_metrics_dict)
                     
                     # Store cluster metrics
                     self._store_cluster_metrics(tx, monitor, cluster_id)
+                    
+                    # Store resource usage data
+                    self._store_resource_usage(tx, monitor, cluster_id, resource_usage)
                     
                     # Create relationships
                     self._create_relationships(tx, monitor, cluster_id, node_ids, pod_ids, service_ids)
@@ -243,7 +258,119 @@ class Neo4JHandler:
         
         return result.single()['vm_id']
     
-    def _store_cluster_info(self, tx, monitor: KubernetesMonitor, context: str, vm_id: str) -> str:
+    def _parse_node_metrics(self, node_metrics: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """Parse node metrics from kubectl top nodes output"""
+        metrics_dict = {}
+        try:
+            if isinstance(node_metrics, dict) and 'items' in node_metrics:
+                for item in node_metrics.get('items', []):
+                    metadata = item.get('metadata', {})
+                    name = metadata.get('name', '')
+                    usage = item.get('usage', {})
+                    
+                    # Parse CPU (convert to float percentage)
+                    cpu_str = usage.get('cpu', '0')
+                    cpu_value = self._parse_cpu_to_float(cpu_str)
+                    
+                    # Parse Memory (convert to float in MiB)
+                    memory_str = usage.get('memory', '0')
+                    memory_value = self._parse_memory_to_mib(memory_str)
+                    
+                    metrics_dict[name] = {
+                        'cpu_usage': cpu_value,
+                        'memory_usage': memory_value
+                    }
+        except Exception as e:
+            self.logger.warning(f"Failed to parse node metrics: {e}")
+        return metrics_dict
+    
+    def _parse_pod_metrics(self, pod_metrics: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """Parse pod metrics from kubectl top pods output"""
+        metrics_dict = {}
+        try:
+            if isinstance(pod_metrics, dict) and 'items' in pod_metrics:
+                for item in pod_metrics.get('items', []):
+                    metadata = item.get('metadata', {})
+                    namespace = metadata.get('namespace', '')
+                    name = metadata.get('name', '')
+                    pod_key = f"{namespace}/{name}"
+                    
+                    containers = item.get('containers', [])
+                    container_metrics = {}
+                    
+                    for container in containers:
+                        container_name = container.get('name', '')
+                        usage = container.get('usage', {})
+                        
+                        # Parse CPU (convert to float percentage)
+                        cpu_str = usage.get('cpu', '0')
+                        cpu_value = self._parse_cpu_to_float(cpu_str)
+                        
+                        # Parse Memory (convert to float in MiB)
+                        memory_str = usage.get('memory', '0')
+                        memory_value = self._parse_memory_to_mib(memory_str)
+                        
+                        container_metrics[container_name] = {
+                            'cpu_usage': cpu_value,
+                            'memory_usage': memory_value
+                        }
+                    
+                    metrics_dict[pod_key] = container_metrics
+        except Exception as e:
+            self.logger.warning(f"Failed to parse pod metrics: {e}")
+        return metrics_dict
+    
+    def _parse_cpu_to_float(self, cpu_str: str) -> float:
+        """Parse CPU string to float (millicores or cores)"""
+        if not cpu_str or cpu_str == '0':
+            return 0.0
+        
+        try:
+            cpu_str = cpu_str.strip()
+            if cpu_str.endswith('m'):
+                # Millicores
+                return float(cpu_str[:-1]) / 1000.0
+            elif cpu_str.endswith('n'):
+                # Nanocores
+                return float(cpu_str[:-1]) / 1000000000.0
+            else:
+                # Cores
+                return float(cpu_str)
+        except:
+            return 0.0
+    
+    def _parse_memory_to_mib(self, memory_str: str) -> float:
+        """Parse memory string to float (MiB)"""
+        if not memory_str or memory_str == '0':
+            return 0.0
+        
+        try:
+            memory_str = memory_str.strip().upper()
+            
+            # Handle different units
+            if memory_str.endswith('KI'):
+                return float(memory_str[:-2]) / 1024.0
+            elif memory_str.endswith('MI'):
+                return float(memory_str[:-2])
+            elif memory_str.endswith('GI'):
+                return float(memory_str[:-2]) * 1024.0
+            elif memory_str.endswith('TI'):
+                return float(memory_str[:-2]) * 1024.0 * 1024.0
+            elif memory_str.endswith('K'):
+                return float(memory_str[:-1]) / 1024.0
+            elif memory_str.endswith('M'):
+                return float(memory_str[:-1])
+            elif memory_str.endswith('G'):
+                return float(memory_str[:-1]) * 1024.0
+            elif memory_str.endswith('T'):
+                return float(memory_str[:-1]) * 1024.0 * 1024.0
+            else:
+                # Assume bytes
+                return float(memory_str) / (1024.0 * 1024.0)
+        except:
+            return 0.0
+    
+    def _store_cluster_info(self, tx, monitor: KubernetesMonitor, context: str, vm_id: str, available_contexts: List[str]) -> str:
         """Store cluster information and return cluster ID"""
         cluster_id = f"cluster_{context}_{vm_id}"
         
@@ -255,6 +382,7 @@ class Neo4JHandler:
         SET c.context = $context,
             c.vm_id = $vm_id,
             c.cluster_info = $cluster_info,
+            c.available_contexts = $available_contexts,
             c.timestamp = datetime(),
             c.last_updated = datetime()
         RETURN c.id as cluster_id
@@ -264,18 +392,25 @@ class Neo4JHandler:
                        cluster_id=cluster_id,
                        context=context,
                        vm_id=vm_id,
-                       cluster_info=json.dumps(cluster_info))
+                       cluster_info=json.dumps(cluster_info),
+                       available_contexts=available_contexts)
         
         return result.single()['cluster_id']
     
-    def _store_nodes(self, tx, monitor: KubernetesMonitor, cluster_id: str) -> List[str]:
+    def _store_nodes(self, tx, monitor: KubernetesMonitor, cluster_id: str, node_metrics_dict: Dict[str, Dict[str, Any]] = None) -> List[str]:
         """Store node information and return list of node IDs"""
         nodes = monitor.get_nodes()
         node_ids = []
+        node_metrics_dict = node_metrics_dict or {}
         
         for node in nodes:
             node_id = f"node_{node.name}_{cluster_id}"
             node_ids.append(node_id)
+            
+            # Get actual usage from metrics if available
+            node_metrics = node_metrics_dict.get(node.name, {})
+            cpu_usage = node_metrics.get('cpu_usage', node.cpu_usage)
+            memory_usage = node_metrics.get('memory_usage', node.memory_usage)
             
             query = """
             MERGE (n:Node {id: $node_id})
@@ -303,8 +438,8 @@ class Neo4JHandler:
                    memory_capacity=node.memory_capacity,
                    cpu_allocatable=node.cpu_allocatable,
                    memory_allocatable=node.memory_allocatable,
-                   cpu_usage=node.cpu_usage,
-                   memory_usage=node.memory_usage,
+                   cpu_usage=cpu_usage,
+                   memory_usage=memory_usage,
                    cluster_id=cluster_id)
         
         return node_ids
@@ -385,15 +520,23 @@ class Neo4JHandler:
         
         return service_ids
     
-    def _store_containers(self, tx, monitor: KubernetesMonitor, pod_ids: List[str]):
+    def _store_containers(self, tx, monitor: KubernetesMonitor, pod_ids: List[str], pod_metrics_dict: Dict[str, Dict[str, Any]] = None):
         """Store container information"""
         pods = monitor.get_pods()
+        pod_metrics_dict = pod_metrics_dict or {}
         
         for i, pod in enumerate(pods):
             pod_id = pod_ids[i] if i < len(pod_ids) else f"pod_{pod.name}_{pod.namespace}"
+            pod_key = f"{pod.namespace}/{pod.name}"
+            container_metrics = pod_metrics_dict.get(pod_key, {})
             
             for container in pod.containers:
                 container_id = f"container_{container.name}_{pod_id}"
+                
+                # Get actual usage from metrics if available
+                container_metric = container_metrics.get(container.name, {})
+                cpu_usage = container_metric.get('cpu_usage', container.cpu_usage)
+                memory_usage = container_metric.get('memory_usage', container.memory_usage)
                 
                 query = """
                 MERGE (ct:Container {id: $container_id})
@@ -415,8 +558,8 @@ class Neo4JHandler:
                        name=container.name,
                        image=container.image,
                        status=container.status,
-                       cpu_usage=container.cpu_usage,
-                       memory_usage=container.memory_usage,
+                       cpu_usage=cpu_usage,
+                       memory_usage=memory_usage,
                        memory_limit=container.memory_limit,
                        cpu_limit=container.cpu_limit,
                        pod_id=pod_id)
@@ -453,6 +596,30 @@ class Neo4JHandler:
                total_cpu_usage=metrics.total_cpu_usage,
                total_memory_usage=metrics.total_memory_usage)
     
+    def _store_resource_usage(self, tx, monitor: KubernetesMonitor, cluster_id: str, resource_usage: Dict[str, Any]):
+        """Store resource usage data from metrics-server"""
+        if not resource_usage:
+            return
+        
+        query = """
+        MERGE (ru:ResourceUsage {cluster_id: $cluster_id})
+        SET ru.pod_metrics = $pod_metrics,
+            ru.node_metrics = $node_metrics,
+            ru.timestamp = $timestamp,
+            ru.last_updated = datetime()
+        RETURN ru.cluster_id as cluster_id
+        """
+        
+        timestamp = resource_usage.get('timestamp', datetime.now().isoformat())
+        pod_metrics = json.dumps(resource_usage.get('pod_metrics', {}))
+        node_metrics = json.dumps(resource_usage.get('node_metrics', {}))
+        
+        tx.run(query,
+               cluster_id=cluster_id,
+               pod_metrics=pod_metrics,
+               node_metrics=node_metrics,
+               timestamp=timestamp)
+    
     def _create_relationships(self, tx, monitor: KubernetesMonitor, cluster_id: str, node_ids: List[str], 
                            pod_ids: List[str], service_ids: List[str]):
         """Create relationships between entities"""
@@ -484,6 +651,12 @@ class Neo4JHandler:
             MATCH (c:Cluster {id: $cluster_id}), (s:Service {id: $service_id})
             MERGE (c)-[:CONTAINS]->(s)
             """, cluster_id=cluster_id, service_id=service_id)
+        
+        # Cluster -> ResourceUsage relationship
+        tx.run("""
+        MATCH (c:Cluster {id: $cluster_id}), (ru:ResourceUsage {cluster_id: $cluster_id})
+        MERGE (c)-[:HAS_RESOURCE_USAGE]->(ru)
+        """, cluster_id=cluster_id)
         
         # Node -> Pods relationships (based on pod.node field)
         pods = monitor.get_pods()
