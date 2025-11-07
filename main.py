@@ -9,8 +9,8 @@ import time
 import signal
 import sys
 from datetime import datetime
-from kubernetes_monitor import KubernetesMonitor
-from neo4j_handler import Neo4JHandler
+from DataCollection.kubernetes_monitor import KubernetesMonitor
+from Neo4J.neo4j_handler import Neo4JHandler
 
 
 class MonitoringController:

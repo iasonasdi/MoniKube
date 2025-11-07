@@ -19,7 +19,7 @@ except ImportError:
     print("Neo4J driver not installed. Install with: pip install neo4j")
     GraphDatabase = None
 
-from kubernetes_monitor import (
+from DataCollection.kubernetes_monitor import (
     KubernetesMonitor, 
     ContainerInfo, 
     PodInfo, 

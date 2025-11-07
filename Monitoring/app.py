@@ -15,7 +15,7 @@ from neo4j.time import DateTime as NeoDateTime
 # Add parent directory to path to import neo4j_handler
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from neo4j_handler import Neo4JHandler
+from Neo4J.neo4j_handler import Neo4JHandler
 
 app = Flask(__name__, static_folder='.')
 CORS(app)  # Enable CORS for all routes

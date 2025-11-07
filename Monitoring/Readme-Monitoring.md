@@ -42,7 +42,7 @@ export NEO4J_PASSWORD="password"
 export NEO4J_DATABASE="neo4j"
 ```
 
-### 3. Start the Flask Server
+### 3. Start the Flask Server (Local Python)
 
 Navigate to the Monitoring directory and run:
 
@@ -59,6 +59,110 @@ Open your web browser and navigate to:
 ```
 http://localhost:5000
 ```
+
+## 🐳 Run with Docker
+
+Running the dashboard in Docker keeps it alive even after you close your terminal window.
+
+1. **Build the image** (from the `CYBERNEMO` project root; only the `Monitoring` service and shared `neo4j_handler.py` are included in this image):
+   ```bash
+   docker build -t monitoring-dashboard -f Monitoring/Dockerfile .
+   ```
+
+2. **Set Neo4j connection variables** (optional—Docker image defaults mirror these values, but override them here when needed):
+   ```bash
+   export NEO4J_URI="bolt://localhost:7687"
+   export NEO4J_USERNAME="neo4j"
+   export NEO4J_PASSWORD="password"
+   export NEO4J_DATABASE="neo4j"
+   ```
+
+3. **Run the container in the background**:
+
+Current port selected for browser is *5100* but can change based on desires
+   ```bash
+   docker run -d \
+     --name monitoring-dashboard \
+     -p 5100:5000 \
+     -e NEO4J_URI \
+     -e NEO4J_USERNAME \
+     -e NEO4J_PASSWORD \
+     -e NEO4J_DATABASE \
+     monitoring-dashboard
+   ```
+
+4. **View logs or manage the container**:
+   - Stream logs: `docker logs -f monitoring-dashboard`
+   - Stop the container: `docker stop monitoring-dashboard`
+   - Start again later: `docker start monitoring-dashboard`
+   - Remove it completely: `docker rm -f monitoring-dashboard`
+
+5. **Open the dashboard** at `http://localhost:5000`
+
+> 💡 Tip: store these variables in an `.env` file and run `docker run --env-file .env ...` so you can update Neo4j credentials once and reuse them across environments.
+
+### 🧰 Run Neo4j and the Dashboard Together (Docker Compose)
+
+When you want a portable setup that always launches both Neo4j and the monitoring dashboard on the same machine, use the `docker-compose.yml` inside the `Monitoring/` folder:
+
+1. Build and start both services from the Monitoring directory:
+   ```bash
+   cd /home/cosmote/CYBERNEMO/Monitoring
+   docker compose up -d
+   ```
+
+   This will:
+   - Start `neo4j:5.15-community` with default credentials `neo4j/password`
+   - Build the monitoring image from `Monitoring/Dockerfile`
+   - Expose the dashboard on `http://localhost:5100`
+   - Expose Neo4j Browser on `http://localhost:7474`
+
+2. Check logs if needed:
+   ```bash
+   docker compose logs -f dashboard
+   docker compose logs -f neo4j
+   ```
+
+3. Stop everything when you are done:
+   ```bash
+   docker compose down
+   ```
+
+4. Persist Neo4j data using the named volumes declared in `docker-compose.yml` (`neo4j_data`, `neo4j_logs`).
+
+> 🔐 Change the default Neo4j credentials by editing `docker-compose.yml` (env var `NEO4J_AUTH`) and updating the monitoring service environment variables accordingly before running `docker compose up`.
+
+### 🔁 Updating the Docker Image after Code Changes
+
+When you edit `app.py`, `index.html`, or any supporting files, rebuild the image so the container picks up the new version:
+
+1. Stop (and optionally remove) the running container:
+   ```bash
+   docker stop monitoring-dashboard
+   docker rm monitoring-dashboard   # omit if you want to reuse the container name without removing
+   ```
+
+2. Rebuild the image from the project root:
+   ```bash
+   docker build -t monitoring-dashboard -f Monitoring/Dockerfile .
+   ```
+
+   Add `--no-cache` if you want to bypass Docker's layer cache:
+   ```bash
+   docker build --no-cache -t monitoring-dashboard -f Monitoring/Dockerfile .
+   ```
+
+3. Start a new container from the freshly built image:
+   ```bash
+   docker run -d \
+     --name monitoring-dashboard \
+     -p 5000:5000 \
+     -e NEO4J_URI \
+     -e NEO4J_USERNAME \
+     -e NEO4J_PASSWORD \
+     -e NEO4J_DATABASE \
+     monitoring-dashboard
+   ```
 
 ## 🎮 Usage
 
