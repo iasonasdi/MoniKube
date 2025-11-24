@@ -27,6 +27,7 @@ from DataCollection.kubernetes_monitor import (
     NodeInfo, 
     ClusterMetrics
 )
+from DataCollection.service_spy import DockerServiceSpy, ContainerSecurityInfo
 
 
 class Neo4JHandler:
@@ -145,7 +146,7 @@ class Neo4JHandler:
             self.logger.info("Disconnected from Neo4J")
     
     def create_schema(self):
-        """Create Neo4J schema for Kubernetes monitoring data"""
+        """Create Neo4J schema for Kubernetes and Docker monitoring data"""
         schema_queries = [
             # Create indexes for performance
             "CREATE INDEX vm_id_index IF NOT EXISTS FOR (v:VM) ON (v.id)",
@@ -155,6 +156,13 @@ class Neo4JHandler:
             "CREATE INDEX service_id_index IF NOT EXISTS FOR (s:Service) ON (s.id)",
             "CREATE INDEX container_id_index IF NOT EXISTS FOR (ct:Container) ON (ct.id)",
             "CREATE INDEX resource_usage_cluster_index IF NOT EXISTS FOR (ru:ResourceUsage) ON (ru.cluster_id)",
+            # Docker container indexes
+            "CREATE INDEX docker_container_id_index IF NOT EXISTS FOR (dc:DockerContainer) ON (dc.id)",
+            "CREATE INDEX process_id_index IF NOT EXISTS FOR (pr:Process) ON (pr.id)",
+            "CREATE INDEX network_connection_id_index IF NOT EXISTS FOR (nc:NetworkConnection) ON (nc.id)",
+            "CREATE INDEX external_ip_id_index IF NOT EXISTS FOR (eip:ExternalIP) ON (eip.id)",
+            "CREATE INDEX open_port_id_index IF NOT EXISTS FOR (op:OpenPort) ON (op.id)",
+            "CREATE INDEX container_user_id_index IF NOT EXISTS FOR (cu:ContainerUser) ON (cu.id)",
             
             # Create constraints for uniqueness
             "CREATE CONSTRAINT vm_id_unique IF NOT EXISTS FOR (v:VM) REQUIRE v.id IS UNIQUE",
@@ -163,7 +171,14 @@ class Neo4JHandler:
             "CREATE CONSTRAINT pod_id_unique IF NOT EXISTS FOR (p:Pod) REQUIRE p.id IS UNIQUE",
             "CREATE CONSTRAINT service_id_unique IF NOT EXISTS FOR (s:Service) REQUIRE s.id IS UNIQUE",
             "CREATE CONSTRAINT container_id_unique IF NOT EXISTS FOR (ct:Container) REQUIRE ct.id IS UNIQUE",
-            "CREATE CONSTRAINT resource_usage_cluster_unique IF NOT EXISTS FOR (ru:ResourceUsage) REQUIRE ru.cluster_id IS UNIQUE"
+            "CREATE CONSTRAINT resource_usage_cluster_unique IF NOT EXISTS FOR (ru:ResourceUsage) REQUIRE ru.cluster_id IS UNIQUE",
+            # Docker container constraints
+            "CREATE CONSTRAINT docker_container_id_unique IF NOT EXISTS FOR (dc:DockerContainer) REQUIRE dc.id IS UNIQUE",
+            "CREATE CONSTRAINT process_id_unique IF NOT EXISTS FOR (pr:Process) REQUIRE pr.id IS UNIQUE",
+            "CREATE CONSTRAINT network_connection_id_unique IF NOT EXISTS FOR (nc:NetworkConnection) REQUIRE nc.id IS UNIQUE",
+            "CREATE CONSTRAINT external_ip_id_unique IF NOT EXISTS FOR (eip:ExternalIP) REQUIRE eip.id IS UNIQUE",
+            "CREATE CONSTRAINT open_port_id_unique IF NOT EXISTS FOR (op:OpenPort) REQUIRE op.id IS UNIQUE",
+            "CREATE CONSTRAINT container_user_id_unique IF NOT EXISTS FOR (cu:ContainerUser) REQUIRE cu.id IS UNIQUE"
         ]
         
         try:
@@ -235,15 +250,16 @@ class Neo4JHandler:
     
     def _store_vm_info(self, tx) -> str:
         """Store VM information and return VM ID"""
-        vm_id = f"vm_{self.vm_identifier['hostname']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Use stable ID based on hostname only (no timestamp to avoid duplicates)
+        vm_id = f"vm_{self.vm_identifier['hostname']}"
         
         query = """
         MERGE (v:VM {id: $vm_id})
+        ON CREATE SET v.timestamp = $timestamp
         SET v.hostname = $hostname,
             v.ip_addresses = $ip_addresses,
             v.platform = $platform,
             v.python_version = $python_version,
-            v.timestamp = $timestamp,
             v.last_updated = datetime()
         RETURN v.id as vm_id
         """
@@ -379,11 +395,11 @@ class Neo4JHandler:
         
         query = """
         MERGE (c:Cluster {id: $cluster_id})
+        ON CREATE SET c.timestamp = datetime()
         SET c.context = $context,
             c.vm_id = $vm_id,
             c.cluster_info = $cluster_info,
             c.available_contexts = $available_contexts,
-            c.timestamp = datetime(),
             c.last_updated = datetime()
         RETURN c.id as cluster_id
         """
@@ -414,6 +430,7 @@ class Neo4JHandler:
             
             query = """
             MERGE (n:Node {id: $node_id})
+            ON CREATE SET n.timestamp = datetime()
             SET n.name = $name,
                 n.status = $status,
                 n.roles = $roles,
@@ -424,7 +441,6 @@ class Neo4JHandler:
                 n.cpu_usage = $cpu_usage,
                 n.memory_usage = $memory_usage,
                 n.cluster_id = $cluster_id,
-                n.timestamp = datetime(),
                 n.last_updated = datetime()
             RETURN n.id as node_id
             """
@@ -455,6 +471,7 @@ class Neo4JHandler:
             
             query = """
             MERGE (p:Pod {id: $pod_id})
+            ON CREATE SET p.timestamp = datetime()
             SET p.name = $name,
                 p.namespace = $namespace,
                 p.status = $status,
@@ -464,7 +481,6 @@ class Neo4JHandler:
                 p.cpu_limits = $cpu_limits,
                 p.memory_limits = $memory_limits,
                 p.cluster_id = $cluster_id,
-                p.timestamp = datetime(),
                 p.last_updated = datetime()
             RETURN p.id as pod_id
             """
@@ -494,6 +510,7 @@ class Neo4JHandler:
             
             query = """
             MERGE (s:Service {id: $service_id})
+            ON CREATE SET s.timestamp = datetime()
             SET s.name = $name,
                 s.namespace = $namespace,
                 s.type = $type,
@@ -502,7 +519,6 @@ class Neo4JHandler:
                 s.ports = $ports,
                 s.selector = $selector,
                 s.cluster_id = $cluster_id,
-                s.timestamp = datetime(),
                 s.last_updated = datetime()
             RETURN s.id as service_id
             """
@@ -540,6 +556,7 @@ class Neo4JHandler:
                 
                 query = """
                 MERGE (ct:Container {id: $container_id})
+                ON CREATE SET ct.timestamp = datetime()
                 SET ct.name = $name,
                     ct.image = $image,
                     ct.status = $status,
@@ -548,7 +565,6 @@ class Neo4JHandler:
                     ct.memory_limit = $memory_limit,
                     ct.cpu_limit = $cpu_limit,
                     ct.pod_id = $pod_id,
-                    ct.timestamp = datetime(),
                     ct.last_updated = datetime()
                 RETURN ct.id as container_id
                 """
@@ -570,6 +586,7 @@ class Neo4JHandler:
         
         query = """
         MERGE (cm:ClusterMetrics {cluster_id: $cluster_id})
+        ON CREATE SET cm.timestamp = datetime()
         SET cm.total_pods = $total_pods,
             cm.running_pods = $running_pods,
             cm.pending_pods = $pending_pods,
@@ -579,7 +596,6 @@ class Neo4JHandler:
             cm.ready_nodes = $ready_nodes,
             cm.total_cpu_usage = $total_cpu_usage,
             cm.total_memory_usage = $total_memory_usage,
-            cm.timestamp = datetime(),
             cm.last_updated = datetime()
         RETURN cm.cluster_id as cluster_id
         """
@@ -603,9 +619,9 @@ class Neo4JHandler:
         
         query = """
         MERGE (ru:ResourceUsage {cluster_id: $cluster_id})
+        ON CREATE SET ru.timestamp = $timestamp
         SET ru.pod_metrics = $pod_metrics,
             ru.node_metrics = $node_metrics,
-            ru.timestamp = $timestamp,
             ru.last_updated = datetime()
         RETURN ru.cluster_id as cluster_id
         """
@@ -682,6 +698,260 @@ class Neo4JHandler:
                     MERGE (p)-[:CONTAINS]->(ct)
                     """, pod_id=pod_id, container_id=container_id)
     
+    def store_docker_data(self, docker_spy: DockerServiceSpy) -> bool:
+        """
+        Store Docker container monitoring data in Neo4J.
+        
+        Args:
+            docker_spy: DockerServiceSpy instance with collected data
+            
+        Returns:
+            bool: Success status
+        """
+        try:
+            containers_data = docker_spy.containers_data
+            if not containers_data:
+                self.logger.warning("No Docker container data to store")
+                return False
+            
+            with self.driver.session() as session:
+                with session.begin_transaction() as tx:
+                    # Get or create VM
+                    vm_id = self._store_vm_info(tx)
+                    
+                    # Store each Docker container and its related data
+                    for container_data in containers_data:
+                        container_id = self._store_docker_container(tx, container_data, vm_id)
+                        self._store_processes(tx, container_data, container_id)
+                        self._store_network_connections(tx, container_data, container_id)
+                        self._store_external_ips(tx, container_data, container_id)
+                        self._store_open_ports(tx, container_data, container_id)
+                        self._store_container_users(tx, container_data, container_id)
+                    
+                    # Create relationships
+                    self._create_docker_relationships(tx, containers_data, vm_id)
+                    
+                    self.logger.info(f"Successfully stored {len(containers_data)} Docker containers")
+                    return True
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to store Docker data: {e}")
+            return False
+    
+    def _store_docker_container(self, tx, container_data: ContainerSecurityInfo, vm_id: str) -> str:
+        """Store Docker container information"""
+        container_id = f"docker_{container_data.container_id[:12]}_{vm_id}"
+        
+        query = """
+        MERGE (dc:DockerContainer {id: $container_id})
+        ON CREATE SET dc.timestamp = datetime()
+        SET dc.name = $name,
+            dc.container_id = $container_id_full,
+            dc.image = $image,
+            dc.status = $status,
+            dc.vm_id = $vm_id,
+            dc.last_updated = datetime()
+        RETURN dc.id as container_id
+        """
+        
+        result = tx.run(query,
+                       container_id=container_id,
+                       name=container_data.container_name,
+                       container_id_full=container_data.container_id,
+                       image=container_data.image,
+                       status=container_data.status,
+                       vm_id=vm_id)
+        
+        return result.single()['container_id']
+    
+    def _store_processes(self, tx, container_data: ContainerSecurityInfo, container_id: str):
+        """Store process information for a Docker container"""
+        for process in container_data.processes:
+            process_id = f"process_{process.pid}_{container_id}"
+            
+            query = """
+            MERGE (pr:Process {id: $process_id})
+            ON CREATE SET pr.timestamp = datetime()
+            SET pr.pid = $pid,
+                pr.user = $user,
+                pr.cpu_percent = $cpu_percent,
+                pr.memory_percent = $memory_percent,
+                pr.memory_kb = $memory_kb,
+                pr.command = $command,
+                pr.start_time = $start_time,
+                pr.container_id = $container_id,
+                pr.last_updated = datetime()
+            RETURN pr.id as process_id
+            """
+            
+            tx.run(query,
+                  process_id=process_id,
+                  pid=process.pid,
+                  user=process.user,
+                  cpu_percent=process.cpu_percent,
+                  memory_percent=process.memory_percent,
+                  memory_kb=process.memory_kb,
+                  command=process.command[:500],  # Limit length
+                  start_time=process.start_time,
+                  container_id=container_id)
+    
+    def _store_network_connections(self, tx, container_data: ContainerSecurityInfo, container_id: str):
+        """Store network connection information"""
+        for conn in container_data.network_connections:
+            conn_id = f"conn_{conn.protocol}_{conn.local_address}_{conn.local_port}_{conn.remote_address}_{conn.remote_port}_{container_id}"
+            
+            query = """
+            MERGE (nc:NetworkConnection {id: $conn_id})
+            ON CREATE SET nc.timestamp = datetime()
+            SET nc.protocol = $protocol,
+                nc.local_address = $local_address,
+                nc.local_port = $local_port,
+                nc.remote_address = $remote_address,
+                nc.remote_port = $remote_port,
+                nc.state = $state,
+                nc.process_name = $process_name,
+                nc.pid = $pid,
+                nc.container_id = $container_id,
+                nc.last_updated = datetime()
+            RETURN nc.id as conn_id
+            """
+            
+            tx.run(query,
+                  conn_id=conn_id,
+                  protocol=conn.protocol,
+                  local_address=conn.local_address,
+                  local_port=conn.local_port,
+                  remote_address=conn.remote_address,
+                  remote_port=conn.remote_port,
+                  state=conn.state,
+                  process_name=conn.process_name,
+                  pid=conn.pid,
+                  container_id=container_id)
+    
+    def _store_external_ips(self, tx, container_data: ContainerSecurityInfo, container_id: str):
+        """Store external IP addresses"""
+        for ip in container_data.external_ips:
+            ip_id = f"ip_{ip}"
+            
+            query = """
+            MERGE (eip:ExternalIP {id: $ip_id})
+            ON CREATE SET eip.timestamp = datetime()
+            SET eip.address = $address,
+                eip.is_private = false,
+                eip.last_seen = datetime()
+            RETURN eip.id as ip_id
+            """
+            
+            tx.run(query, ip_id=ip_id, address=ip)
+    
+    def _store_open_ports(self, tx, container_data: ContainerSecurityInfo, container_id: str):
+        """Store open port information"""
+        for port in container_data.open_ports:
+            port_id = f"port_{port['protocol']}_{port['port']}_{container_id}"
+            
+            query = """
+            MERGE (op:OpenPort {id: $port_id})
+            ON CREATE SET op.timestamp = datetime()
+            SET op.protocol = $protocol,
+                op.address = $address,
+                op.port = $port,
+                op.state = $state,
+                op.container_id = $container_id,
+                op.last_updated = datetime()
+            RETURN op.id as port_id
+            """
+            
+            tx.run(query,
+                  port_id=port_id,
+                  protocol=port['protocol'],
+                  address=port['address'],
+                  port=port['port'],
+                  state=port['state'],
+                  container_id=container_id)
+    
+    def _store_container_users(self, tx, container_data: ContainerSecurityInfo, container_id: str):
+        """Store container user information"""
+        for user in container_data.users:
+            user_id = f"user_{user}_{container_id}"
+            
+            query = """
+            MERGE (cu:ContainerUser {id: $user_id})
+            ON CREATE SET cu.timestamp = datetime()
+            SET cu.username = $username,
+                cu.container_id = $container_id,
+                cu.last_updated = datetime()
+            RETURN cu.id as user_id
+            """
+            
+            tx.run(query, user_id=user_id, username=user, container_id=container_id)
+    
+    def _create_docker_relationships(self, tx, containers_data: List[ContainerSecurityInfo], vm_id: str):
+        """Create relationships for Docker containers"""
+        for container_data in containers_data:
+            container_id = f"docker_{container_data.container_id[:12]}_{vm_id}"
+            
+            # VM -> DockerContainer
+            tx.run("""
+            MATCH (v:VM {id: $vm_id}), (dc:DockerContainer {id: $container_id})
+            MERGE (v)-[:HOSTS]->(dc)
+            """, vm_id=vm_id, container_id=container_id)
+            
+            # DockerContainer -> Process
+            for process in container_data.processes:
+                process_id = f"process_{process.pid}_{container_id}"
+                tx.run("""
+                MATCH (dc:DockerContainer {id: $container_id}), (pr:Process {id: $process_id})
+                MERGE (dc)-[:RUNS_PROCESS]->(pr)
+                """, container_id=container_id, process_id=process_id)
+            
+            # DockerContainer -> NetworkConnection
+            for conn in container_data.network_connections:
+                conn_id = f"conn_{conn.protocol}_{conn.local_address}_{conn.local_port}_{conn.remote_address}_{conn.remote_port}_{container_id}"
+                tx.run("""
+                MATCH (dc:DockerContainer {id: $container_id}), (nc:NetworkConnection {id: $conn_id})
+                MERGE (dc)-[:HAS_CONNECTION]->(nc)
+                """, container_id=container_id, conn_id=conn_id)
+                
+                # NetworkConnection -> ExternalIP
+                if conn.remote_address and conn.remote_address not in ['*', '0.0.0.0', '::']:
+                    try:
+                        import ipaddress
+                        ip = ipaddress.ip_address(conn.remote_address)
+                        if not (ip.is_private or ip.is_loopback or ip.is_link_local):
+                            ip_id = f"ip_{conn.remote_address}"
+                            tx.run("""
+                            MATCH (nc:NetworkConnection {id: $conn_id}), (eip:ExternalIP {id: $ip_id})
+                            MERGE (nc)-[:CONNECTS_TO]->(eip)
+                            """, conn_id=conn_id, ip_id=ip_id)
+                    except:
+                        pass
+            
+            # DockerContainer -> OpenPort
+            for port in container_data.open_ports:
+                port_id = f"port_{port['protocol']}_{port['port']}_{container_id}"
+                tx.run("""
+                MATCH (dc:DockerContainer {id: $container_id}), (op:OpenPort {id: $port_id})
+                MERGE (dc)-[:HAS_OPEN_PORT]->(op)
+                """, container_id=container_id, port_id=port_id)
+            
+            # DockerContainer -> ContainerUser
+            for user in container_data.users:
+                user_id = f"user_{user}_{container_id}"
+                tx.run("""
+                MATCH (dc:DockerContainer {id: $container_id}), (cu:ContainerUser {id: $user_id})
+                MERGE (dc)-[:HAS_USER]->(cu)
+                """, container_id=container_id, user_id=user_id)
+            
+            # Process -> NetworkConnection (if process info available)
+            for conn in container_data.network_connections:
+                if conn.pid:
+                    process_id = f"process_{conn.pid}_{container_id}"
+                    conn_id = f"conn_{conn.protocol}_{conn.local_address}_{conn.local_port}_{conn.remote_address}_{conn.remote_port}_{container_id}"
+                    tx.run("""
+                    MATCH (pr:Process {id: $process_id}), (nc:NetworkConnection {id: $conn_id})
+                    MERGE (pr)-[:PROCESS_USES]->(nc)
+                    """, process_id=process_id, conn_id=conn_id)
+    
     def query_data(self, query: str, parameters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Execute a custom Cypher query"""
         try:
@@ -722,24 +992,38 @@ class Neo4JHandler:
         """Get complete infrastructure graph for visualization"""
         if vm_id:
             query = """
-            MATCH (v:VM {id: $vm_id})-[:HOSTS]->(c:Cluster)
+            MATCH (v:VM {id: $vm_id})
+            OPTIONAL MATCH (v)-[:HOSTS]->(c:Cluster)
+            OPTIONAL MATCH (v)-[:HOSTS]->(dc:DockerContainer)
             OPTIONAL MATCH (c)-[:CONTAINS]->(n:Node)
             OPTIONAL MATCH (c)-[:CONTAINS]->(p:Pod)
             OPTIONAL MATCH (c)-[:CONTAINS]->(s:Service)
             OPTIONAL MATCH (n)-[:HOSTS]->(p)
             OPTIONAL MATCH (p)-[:CONTAINS]->(ct:Container)
-            RETURN v, c, n, p, s, ct
+            OPTIONAL MATCH (dc)-[:RUNS_PROCESS]->(pr:Process)
+            OPTIONAL MATCH (dc)-[:HAS_CONNECTION]->(nc:NetworkConnection)
+            OPTIONAL MATCH (nc)-[:CONNECTS_TO]->(eip:ExternalIP)
+            OPTIONAL MATCH (dc)-[:HAS_OPEN_PORT]->(op:OpenPort)
+            OPTIONAL MATCH (dc)-[:HAS_USER]->(cu:ContainerUser)
+            RETURN v, c, dc, n, p, s, ct, pr, nc, eip, op, cu
             """
             return self.query_data(query, {'vm_id': vm_id})
         else:
             query = """
-            MATCH (v:VM)-[:HOSTS]->(c:Cluster)
+            MATCH (v:VM)
+            OPTIONAL MATCH (v)-[:HOSTS]->(c:Cluster)
+            OPTIONAL MATCH (v)-[:HOSTS]->(dc:DockerContainer)
             OPTIONAL MATCH (c)-[:CONTAINS]->(n:Node)
             OPTIONAL MATCH (c)-[:CONTAINS]->(p:Pod)
             OPTIONAL MATCH (c)-[:CONTAINS]->(s:Service)
             OPTIONAL MATCH (n)-[:HOSTS]->(p)
             OPTIONAL MATCH (p)-[:CONTAINS]->(ct:Container)
-            RETURN v, c, n, p, s, ct
+            OPTIONAL MATCH (dc)-[:RUNS_PROCESS]->(pr:Process)
+            OPTIONAL MATCH (dc)-[:HAS_CONNECTION]->(nc:NetworkConnection)
+            OPTIONAL MATCH (nc)-[:CONNECTS_TO]->(eip:ExternalIP)
+            OPTIONAL MATCH (dc)-[:HAS_OPEN_PORT]->(op:OpenPort)
+            OPTIONAL MATCH (dc)-[:HAS_USER]->(cu:ContainerUser)
+            RETURN v, c, dc, n, p, s, ct, pr, nc, eip, op, cu
             """
             return self.query_data(query)
     

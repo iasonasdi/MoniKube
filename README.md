@@ -1,10 +1,13 @@
 # MoniKube
 
+`Last Updated: 24/11/2025`
+
 A comprehensive Kubernetes distributed monitoring tool that monitors all clusters deployed on a VM and collects data, stats, and system metrics.
 
 ## 🚀 Features
 
 - **Multi-Cluster Monitoring**: Automatically discover and monitor multiple Kubernetes clusters
+- **Docker Container Monitoring**: Monitor Docker containers running on the host with security-focused data collection
 - **Real-time Monitoring**: Continuous monitoring with customizable intervals
 - **Comprehensive Data Collection**: 
   - Cluster information and versions
@@ -12,8 +15,11 @@ A comprehensive Kubernetes distributed monitoring tool that monitors all cluster
   - Pod status, containers, and resource usage
   - Service discovery and configuration
   - System metrics (CPU, RAM) when metrics-server is available
+  - Docker container processes, network connections, and external IPs
 - **Flexible Execution**: Run once, limited iterations, or continuously
 - **Rich Console Output**: Visual status indicators and detailed reporting
+- **Neo4J Integration**: Store all monitoring data in Neo4J graph database
+- **Web Visualization**: Interactive graph visualization of infrastructure
 - **JSON Reporting**: Export comprehensive reports for further analysis
 - **Object-Oriented Design**: Easy to extend and customize
 
@@ -22,7 +28,9 @@ A comprehensive Kubernetes distributed monitoring tool that monitors all cluster
 - Python 3.7+
 - kubectl installed and configured
 - Access to Kubernetes clusters
+- Docker installed (for Docker container monitoring, optional)
 - metrics-server (optional, for resource usage monitoring)
+- Neo4J database (optional, for data storage and visualization)
 
 ## 🛠️ Installation
 
@@ -33,6 +41,27 @@ A comprehensive Kubernetes distributed monitoring tool that monitors all cluster
    ```
 
 ## 🎯 Quick Start
+
+### Automated Setup (Recommended)
+
+Use `main.sh` to automatically ensure the kind cluster exists before running monitoring:
+
+```bash
+# Run with automatic kind cluster setup
+./main.sh -db -t 60 -n 1
+
+# All main.py arguments work with main.sh
+./main.sh -db -t 30 -n 5
+
+# Disable Docker monitoring
+./main.sh -db -t 30 -n 5 --no-docker
+```
+
+The script will:
+- Check if kind cluster exists
+- Create it if it doesn't exist
+- Wait for cluster to be ready
+- Then run main.py with your arguments
 
 ### Basic Usage
 
@@ -51,13 +80,21 @@ python main.py -t 60 -n 1
 
 # Run with Neo4J storing
 python3 main.py -db -t 30 -n 5
+
+# Run with Docker monitoring disabled
+python3 main.py -db -t 30 -n 5 --no-docker
 ```
 
 ### Command Line Options
 
 - `-t, --time`: Time interval between monitoring cycles in seconds (default: 10)
 - `-n, --iterations`: Number of monitoring cycles to run (0 = continuous, default: 0)
-- `-db, --neo4j-uri bolt://neo4j-server:7687 --neo4j-username admin --neo4j-password secret`: Store data in the Neo4J database
+- `-db, --database`: Enable Neo4J database storage
+- `--neo4j-uri URI`: Neo4J database URI (default: bolt://localhost:7687)
+- `--neo4j-username USERNAME`: Neo4J username (default: neo4j)
+- `--neo4j-password PASSWORD`: Neo4J password (default: password)
+- `--neo4j-database DATABASE`: Neo4J database name (default: neo4j)
+- `--no-docker`: Disable Docker container monitoring (enabled by default)
 
 ### Examples
 
@@ -70,6 +107,12 @@ python main.py -t 30 -n 5
 
 # Single report
 python main.py -n 1
+
+# Run with Docker monitoring disabled
+python main.py --no-docker
+
+# Run with Neo4J and custom connection
+python main.py -db --neo4j-uri bolt://neo4j-server:7687 --neo4j-username admin --neo4j-password secret
 
 # Show help
 python main.py --help
@@ -163,8 +206,58 @@ The tool also calculates and provides aggregated statistics:
   - Total CPU usage across the cluster
   - Total memory usage across the cluster
 
+### 7. Docker Container Monitoring
+**Note**: Docker monitoring is enabled by default. Use `--no-docker` to disable it.
+
+For each running Docker container, the following security-focused data is collected:
+
+**Container-Level Data:**
+- **Container ID**: Full Docker container ID
+- **Container Name**: Container name
+- **Image**: Docker image name and tag
+- **Status**: Container status
+
+**Process Information:**
+- **Top Processes**: Top 20 processes by CPU usage
+  - Process ID (PID)
+  - User running the process
+  - CPU usage percentage
+  - Memory usage percentage and KB
+  - Command line
+  - Start time
+
+**Network Security:**
+- **Network Connections**: All active network connections
+  - Protocol (TCP/UDP)
+  - Local address and port
+  - Remote address and port
+  - Connection state
+  - Associated process (if available)
+- **External IPs**: List of all external IP addresses the container communicates with
+  - Automatically filters out private IP ranges (10.x.x.x, 172.16.x.x, 192.168.x.x)
+  - Tracks external communication for security analysis
+- **Open Ports**: All listening ports in the container
+  - Protocol
+  - Bind address
+  - Port number
+  - Port state
+
+**User Information:**
+- **Container Users**: List of all user accounts in the container
+  - Extracted from `/etc/passwd`
+  - Currently logged in users
+
+**Security Benefits:**
+- Identify suspicious network connections
+- Track external communication patterns
+- Monitor process activity
+- Detect unauthorized access
+- Analyze container security posture
+
 ### Data Collection Methods
-All data is collected through `kubectl` commands executed with JSON output format:
+
+**Kubernetes Data:**
+All Kubernetes data is collected through `kubectl` commands executed with JSON output format:
 - `kubectl get nodes -o json`
 - `kubectl get pods -o json`
 - `kubectl get services -o json`
@@ -173,7 +266,17 @@ All data is collected through `kubectl` commands executed with JSON output forma
 - `kubectl cluster-info`
 - `kubectl version`
 
-The collected data is parsed and structured into Python dataclasses (`NodeInfo`, `PodInfo`, `ServiceInfo`, `ContainerInfo`, `ClusterMetrics`) for easy programmatic access and JSON export.
+**Docker Data:**
+Docker container data is collected through Docker commands executed inside containers:
+- `docker ps` - List all running containers
+- `docker exec <container> ps aux` - Get process information
+- `docker exec <container> ss -tunap` - Get network connections
+- `docker exec <container> netstat -tunap` - Fallback for network connections
+- `docker exec <container> ss -tuln` - Get open ports
+- `docker exec <container> cat /etc/passwd` - Get user accounts
+- `docker exec <container> who` - Get logged in users
+
+The collected data is parsed and structured into Python dataclasses for easy programmatic access and JSON export.
 
 ## 🔧 Advanced Usage
 
@@ -243,11 +346,27 @@ The main controller that handles:
 - Enhanced console output
 
 ### Data Structures
-- `ContainerInfo`: Container details
-- `PodInfo`: Pod information
-- `ServiceInfo`: Service details
-- `NodeInfo`: Node information
-- `ClusterMetrics`: Overall cluster statistics
+
+The monitoring system uses structured dataclasses to represent all collected data. Here's a comprehensive overview:
+
+| Data Structure | Source | Description | Key Properties |
+|----------------|--------|-------------|----------------|
+| **Kubernetes Monitoring** |
+| `ContainerInfo` | Kubernetes Pods | Container within a Kubernetes pod | `name`, `image`, `status`, `cpu_usage`, `memory_usage`, `cpu_limit`, `memory_limit` |
+| `PodInfo` | Kubernetes API | Kubernetes pod information | `name`, `namespace`, `status`, `node`, `containers[]`, `cpu_requests`, `memory_requests`, `cpu_limits`, `memory_limits` |
+| `ServiceInfo` | Kubernetes API | Kubernetes service configuration | `name`, `namespace`, `type`, `cluster_ip`, `external_ip`, `ports[]`, `selector{}` |
+| `NodeInfo` | Kubernetes API | Kubernetes node information | `name`, `status`, `roles[]`, `cpu_capacity`, `memory_capacity`, `cpu_allocatable`, `memory_allocatable`, `cpu_usage`, `memory_usage` |
+| `ClusterMetrics` | Aggregated | Overall cluster statistics | `total_pods`, `running_pods`, `pending_pods`, `failed_pods`, `total_services`, `total_nodes`, `ready_nodes`, `total_cpu_usage`, `total_memory_usage` |
+| **Docker Container Monitoring** |
+| `ProcessInfo` | Docker Container | Process running inside container | `pid`, `user`, `cpu_percent`, `memory_percent`, `memory_kb`, `command`, `start_time` |
+| `NetworkConnection` | Docker Container | Network connection from container | `protocol`, `local_address`, `local_port`, `remote_address`, `remote_port`, `state`, `process_name`, `pid` |
+| `ContainerSecurityInfo` | Docker Container | Complete security profile | `container_id`, `container_name`, `image`, `status`, `processes[]`, `network_connections[]`, `external_ips{}`, `open_ports[]`, `users{}`, `timestamp` |
+
+**Data Relationships:**
+- **Kubernetes**: `Cluster` → `Node` → `Pod` → `Container`
+- **Docker**: `VM` → `DockerContainer` → `Process`, `NetworkConnection`, `OpenPort`, `ContainerUser`
+- **Network**: `NetworkConnection` → `ExternalIP`
+- **Process**: `Process` → `NetworkConnection` (when process info available)
 
 ## 🔍 Monitoring Output
 
@@ -255,8 +374,10 @@ The tool provides rich console output with:
 - 🖥️ **Node Status**: Visual indicators for node health
 - 🚀 **Pod Status**: Color-coded pod status summary
 - 🌐 **Service Types**: Service breakdown by type
+- 🐳 **Docker Containers**: Container summary with process and network information
 - 📊 **Detailed Metrics**: Total counts and status breakdown
 - ⏱️ **Timing Information**: Cycle numbers and timestamps
+- 🔒 **Security Data**: External IPs, open ports, and process information for Docker containers
 
 ## 🚨 Error Handling
 
@@ -271,7 +392,9 @@ The tool provides rich console output with:
 ### Prerequisites
 1. **kubectl**: Must be installed and configured
 2. **Kubernetes Access**: Proper RBAC permissions
-3. **metrics-server** (optional): For resource usage monitoring
+3. **Docker**: Must be installed and running (for Docker container monitoring)
+4. **metrics-server** (optional): For resource usage monitoring
+5. **Neo4J** (optional): For data storage and visualization
 
 ### Installing metrics-server
 ```bash
@@ -295,6 +418,15 @@ kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/late
 4. **"Permission denied"**
    - Check RBAC permissions for your user/service account
 
+5. **"Docker command not found"**
+   - Install Docker and ensure it's running
+   - Ensure your user has permission to run `docker ps` and `docker exec`
+   - Use `--no-docker` to disable Docker monitoring if not needed
+
+6. **"Failed to execute command in container"**
+   - Some containers may not have required tools (ps, ss, netstat)
+   - This is normal and the tool will gracefully handle missing commands
+
 ### Debug Mode
 Enable debug logging to see detailed command execution:
 ```python
@@ -304,11 +436,12 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## 🔮 Future Enhancements
 
-- **Neo4J Integration**: Send collected metrics to a central Neo4J database
-- **Alerting**: Configurable alerts for cluster issues
-- **Web Dashboard**: Real-time web interface
+- **Alerting**: Configurable alerts for cluster issues and security events
 - **Historical Data**: Store and analyze trends over time
 - **Multi-tenant Support**: Monitor multiple clusters simultaneously
+- **Container Image Scanning**: Security vulnerability scanning for container images
+- **Network Flow Analysis**: Deep packet inspection and flow analysis
+- **Anomaly Detection**: Machine learning-based anomaly detection for security threats
 
 ## 📝 License
 

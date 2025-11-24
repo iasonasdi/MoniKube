@@ -106,6 +106,20 @@
             display: flex;
             align-items: center;
             margin-bottom: 10px;
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 5px;
+            transition: background-color 0.2s;
+            user-select: none;
+        }
+
+        .legend-item:hover {
+            background-color: #e2e8f0;
+        }
+
+        .legend-item.filtered {
+            opacity: 0.5;
+            text-decoration: line-through;
         }
 
         .legend-color {
@@ -113,6 +127,7 @@
             height: 20px;
             border-radius: 50%;
             margin-right: 10px;
+            flex-shrink: 0;
         }
 
         .stats {
@@ -275,30 +290,16 @@
             </div>
 
             <div class="legend">
-                <h3 style="margin-bottom: 15px; font-size: 16px; color: #333;">Node Types</h3>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FF6B6B;"></div>
-                    <span>VM</span>
+                <h3 style="margin-bottom: 15px; font-size: 16px; color: #333;">Node Types <span style="font-size: 12px; color: #666;">(Click to filter)</span></h3>
+                <div id="legendContainer">
+                    <!-- Legend items will be dynamically generated -->
                 </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #4ECDC4;"></div>
-                    <span>Cluster</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #45B7D1;"></div>
-                    <span>Node</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #96CEB4;"></div>
-                    <span>Pod</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FECA57;"></div>
-                    <span>Service</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FF9FF3;"></div>
-                    <span>Container</span>
+                <button class="button" onclick="resetFilters()" style="margin-top: 10px; padding: 8px 16px; font-size: 12px;">🔄 Show All Types</button>
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0;">
+                    <label style="display: flex; align-items: center; cursor: pointer; font-size: 14px; color: #333;">
+                        <input type="checkbox" id="hideLocalhost" onchange="toggleLocalhostFilter()" style="margin-right: 8px; cursor: pointer;">
+                        <span>Hide localhost connections (127.0.0.1)</span>
+                    </label>
                 </div>
             </div>
 
@@ -362,12 +363,160 @@
         let allNodes = [];
         let allEdges = [];
         let selectedNode = null;
+        let filteredTypes = new Set(); // Track which node types are filtered out
+        let hideLocalhost = false; // Track localhost filter state
+
+        // Node type color mapping (must match app.py)
+        const nodeTypeColors = {
+            'VM': '#FF6B6B',
+            'Cluster': '#4ECDC4',
+            'Node': '#45B7D1',
+            'Pod': '#96CEB4',
+            'Service': '#FECA57',
+            'Container': '#FF9FF3',
+            'ClusterMetrics': '#A8E6CF',
+            'ResourceUsage': '#FFA07A',
+            'DockerContainer': '#9B59B6',
+            'Process': '#E74C3C',
+            'NetworkConnection': '#3498DB',
+            'ExternalIP': '#E67E22',
+            'OpenPort': '#F39C12',
+            'ContainerUser': '#1ABC9C'
+        };
 
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
+            initializeLegend();
             checkHealth();
             loadGraph();
         });
+
+        // Initialize legend with all node types
+        function initializeLegend() {
+            const legendContainer = document.getElementById('legendContainer');
+            legendContainer.innerHTML = '';
+            
+            // Sort node types for better organization
+            const sortedTypes = Object.keys(nodeTypeColors).sort();
+            
+            sortedTypes.forEach(type => {
+                const legendItem = document.createElement('div');
+                legendItem.className = 'legend-item';
+                legendItem.dataset.type = type;
+                legendItem.onclick = () => toggleNodeType(type);
+                legendItem.innerHTML = `
+                    <div class="legend-color" style="background: ${nodeTypeColors[type]};"></div>
+                    <span>${type}</span>
+                `;
+                legendContainer.appendChild(legendItem);
+            });
+        }
+
+        // Toggle node type filter
+        function toggleNodeType(nodeType) {
+            if (filteredTypes.has(nodeType)) {
+                filteredTypes.delete(nodeType);
+            } else {
+                filteredTypes.add(nodeType);
+            }
+            
+            // Update visual state
+            const legendItem = document.querySelector(`[data-type="${nodeType}"]`);
+            if (legendItem) {
+                if (filteredTypes.has(nodeType)) {
+                    legendItem.classList.add('filtered');
+                } else {
+                    legendItem.classList.remove('filtered');
+                }
+            }
+            
+            // Apply filters
+            applyFilters();
+        }
+
+        // Reset all filters
+        function resetFilters() {
+            filteredTypes.clear();
+            hideLocalhost = false;
+            document.getElementById('hideLocalhost').checked = false;
+            document.querySelectorAll('.legend-item').forEach(item => {
+                item.classList.remove('filtered');
+            });
+            applyFilters();
+        }
+
+        // Toggle localhost filter
+        function toggleLocalhostFilter() {
+            hideLocalhost = document.getElementById('hideLocalhost').checked;
+            applyFilters();
+        }
+
+        // Check if an IP is localhost/loopback
+        function isLocalhost(ip) {
+            if (!ip) return false;
+            // Check for common localhost patterns
+            if (ip === '127.0.0.1' || ip === 'localhost' || ip === '::1' || ip === '::ffff:127.0.0.1') {
+                return true;
+            }
+            // Check if it starts with 127.
+            if (ip.startsWith('127.')) {
+                return true;
+            }
+            // Check for IPv6 localhost
+            if (ip === '[::1]' || ip.startsWith('[::ffff:127.')) {
+                return true;
+            }
+            return false;
+        }
+
+        // Apply all active filters (both type filters, search, and localhost)
+        function applyFilters() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            
+            let filteredNodes = allNodes;
+            
+            // Apply type filters
+            if (filteredTypes.size > 0) {
+                filteredNodes = filteredNodes.filter(node => !filteredTypes.has(node.type));
+            }
+            
+            // Apply localhost filter for NetworkConnection nodes
+            if (hideLocalhost) {
+                filteredNodes = filteredNodes.filter(node => {
+                    if (node.type === 'NetworkConnection') {
+                        // Check if remote_address is localhost
+                        const remoteAddr = node.properties?.remote_address;
+                        if (remoteAddr && isLocalhost(remoteAddr)) {
+                            return false; // Hide this connection
+                        }
+                    }
+                    return true; // Keep all other nodes
+                });
+            }
+            
+            // Apply search filter
+            if (searchTerm) {
+                filteredNodes = filteredNodes.filter(node => 
+                    node.label.toLowerCase().includes(searchTerm) ||
+                    node.id.toLowerCase().includes(searchTerm) ||
+                    node.type.toLowerCase().includes(searchTerm)
+                );
+            }
+            
+            // Filter edges to only include connections between visible nodes
+            const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
+            const filteredEdges = allEdges.filter(edge => 
+                filteredNodeIds.has(edge.from) && filteredNodeIds.has(edge.to)
+            );
+            
+            data.nodes = filteredNodes;
+            data.edges = filteredEdges;
+            
+            if (network) {
+                network.setData(data);
+                updateStats();
+            }
+        }
 
         // Check Neo4j connection health
         async function checkHealth() {
@@ -407,9 +556,16 @@
 
                 allNodes = result.nodes || [];
                 allEdges = result.edges || [];
-                data = { nodes: result.nodes || [], edges: result.edges || [] };
                 
+                // Update legend with actual node types found in data
+                updateLegendWithActualTypes();
+                
+                // Initialize graph first
                 initializeGraph();
+                
+                // Apply any active filters after graph is initialized
+                applyFilters();
+                
                 updateStats();
                 checkHealth();
                 hideLoader();
@@ -569,32 +725,9 @@
             document.getElementById('edgeCount').textContent = data.edges.length;
         }
 
-        // Filter nodes based on search input
+        // Filter nodes based on search input (now uses applyFilters for consistency)
         function filterNodes() {
-            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-            
-            if (!searchTerm) {
-                data.nodes = allNodes;
-                data.edges = allEdges;
-            } else {
-                const filteredNodes = allNodes.filter(node => 
-                    node.label.toLowerCase().includes(searchTerm) ||
-                    node.id.toLowerCase().includes(searchTerm) ||
-                    node.type.toLowerCase().includes(searchTerm)
-                );
-                
-                const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
-                
-                const filteredEdges = allEdges.filter(edge => 
-                    filteredNodeIds.has(edge.from) && filteredNodeIds.has(edge.to)
-                );
-                
-                data.nodes = filteredNodes;
-                data.edges = filteredEdges;
-            }
-            
-            network.setData(data);
-            updateStats();
+            applyFilters();
         }
 
         // Reset view
@@ -631,6 +764,30 @@
         // Hide loader
         function hideLoader() {
             document.getElementById('loader').classList.remove('active');
+        }
+
+        // Update legend to show which types are actually in the data
+        function updateLegendWithActualTypes() {
+            const typesInData = new Set(allNodes.map(node => node.type));
+            const legendContainer = document.getElementById('legendContainer');
+            
+            // Add any unknown node types (grey circles) to the legend
+            typesInData.forEach(type => {
+                if (!nodeTypeColors[type]) {
+                    // This is an unknown type - add it to legend with grey color
+                    if (!document.querySelector(`[data-type="${type}"]`)) {
+                        const legendItem = document.createElement('div');
+                        legendItem.className = 'legend-item';
+                        legendItem.dataset.type = type;
+                        legendItem.onclick = () => toggleNodeType(type);
+                        legendItem.innerHTML = `
+                            <div class="legend-color" style="background: #BDC3C7;"></div>
+                            <span>${type} (Unknown)</span>
+                        `;
+                        legendContainer.appendChild(legendItem);
+                    }
+                }
+            });
         }
     </script>
 </body>

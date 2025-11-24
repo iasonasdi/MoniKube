@@ -136,6 +136,29 @@ When you want a portable setup that always launches both Neo4j and the monitorin
 
 When you edit `app.py`, `index.html`, or any supporting files, rebuild the image so the container picks up the new version:
 
+**Minor changes**
+
+For minor changes (like in html) you can stop and rebuild and rerun.
+Run the following
+
+```bash
+# Navigate to the Monitoring directory
+cd /home/cosmote/CYBERNEMO/Monitoring
+
+# Stop the containers
+docker-compose down
+
+# Rebuild the image with the updated index.html
+docker-compose build
+
+# Start the containers again
+docker-compose up -d
+
+# Check the logs to make sure it's running
+docker-compose logs -f dashboard
+```
+
+**Stop - Rebuild - Delete**
 1. Stop (and optionally remove) the running container:
    ```bash
    docker stop monitoring-dashboard

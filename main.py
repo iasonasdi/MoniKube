@@ -10,17 +10,20 @@ import signal
 import sys
 from datetime import datetime
 from DataCollection.kubernetes_monitor import KubernetesMonitor
+from DataCollection.service_spy import DockerServiceSpy
 from Neo4J.neo4j_handler import Neo4JHandler
 
 
 class MonitoringController:
     """Controller class to handle monitoring with timing and iteration control"""
     
-    def __init__(self, neo4j_config=None):
+    def __init__(self, neo4j_config=None, enable_docker=True):
         self.monitor = KubernetesMonitor()
+        self.docker_spy = DockerServiceSpy() if enable_docker else None
         self.running = True
         self.neo4j_handler = None
         self.neo4j_config = neo4j_config
+        self.enable_docker = enable_docker
         
         # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -113,6 +116,20 @@ class MonitoringController:
             
             print(f"\n{'='*60}")
             
+            # Monitor Docker containers if enabled
+            docker_data = None
+            if self.enable_docker and self.docker_spy:
+                try:
+                    print(f"\n🐳 DOCKER CONTAINER MONITORING:")
+                    print(f"{'='*60}")
+                    docker_data = self.docker_spy.spy_on_containers()
+                    if docker_data:
+                        self.docker_spy.print_summary()
+                    else:
+                        print("   No Docker containers found or accessible")
+                except Exception as e:
+                    print(f"⚠️  Docker monitoring error: {e}")
+            
             # Store data in Neo4J if configured
             if self.neo4j_handler:
                 try:
@@ -120,11 +137,18 @@ class MonitoringController:
                     contexts = self.monitor.get_available_contexts()
                     current_context = contexts[0] if contexts else "default"
                     
-                    # Store monitoring data
+                    # Store Kubernetes monitoring data
                     if self.neo4j_handler.store_monitoring_data(self.monitor, current_context):
-                        print("💾 Data stored in Neo4J database")
+                        print("💾 Kubernetes data stored in Neo4J database")
                     else:
-                        print("⚠️  Failed to store data in Neo4J")
+                        print("⚠️  Failed to store Kubernetes data in Neo4J")
+                    
+                    # Store Docker monitoring data
+                    if docker_data and self.docker_spy:
+                        if self.neo4j_handler.store_docker_data(self.docker_spy):
+                            print("💾 Docker data stored in Neo4J database")
+                        else:
+                            print("⚠️  Failed to store Docker data in Neo4J")
                         
                 except Exception as e:
                     print(f"⚠️  Neo4J storage error: {e}")
@@ -235,6 +259,12 @@ Examples:
         help='Neo4J database name (default: neo4j)'
     )
     
+    parser.add_argument(
+        '--no-docker',
+        action='store_true',
+        help='Disable Docker container monitoring'
+    )
+    
     return parser.parse_args()
 
 
@@ -268,7 +298,13 @@ def main():
         print(f"   Database: {neo4j_config['database']}")
     
     # Initialize controller
-    controller = MonitoringController(neo4j_config)
+    enable_docker = not args.no_docker
+    controller = MonitoringController(neo4j_config, enable_docker=enable_docker)
+    
+    if enable_docker:
+        print("🐳 Docker container monitoring enabled")
+    else:
+        print("🐳 Docker container monitoring disabled")
     
     # Check if kubectl is available
     contexts = controller.monitor.get_available_contexts()

@@ -10,10 +10,24 @@ The schema represents a comprehensive graph model of Kubernetes infrastructure, 
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| **Node Types** | 8 | VM, Cluster, Node, Pod, Container, Service, ClusterMetrics, ResourceUsage |
-| **Relationships** | 5 | HOSTS, CONTAINS (multiple types), HAS_RESOURCE_USAGE |
-| **Indexes** | 7 | Performance indexes on key properties |
-| **Constraints** | 7 | Uniqueness constraints on all node IDs |
+| **Node Types** | 14 | VM, Cluster, Node, Pod, Container, Service, ClusterMetrics, ResourceUsage, DockerContainer, Process, NetworkConnection, ExternalIP, OpenPort, ContainerUser |
+| **Relationships** | 9 | HOSTS, CONTAINS, HAS_RESOURCE_USAGE, RUNS_PROCESS, HAS_CONNECTION, CONNECTS_TO, HAS_OPEN_PORT, HAS_USER, PROCESS_USES |
+| **Indexes** | 13 | Performance indexes on Kubernetes and Docker entities |
+| **Constraints** | 13 | Uniqueness constraints on all node IDs |
+
+#### Relationship Quick Reference
+
+| Relationship | Direction(s) | Meaning |
+|--------------|--------------|---------|
+| `HOSTS` | `VM → Cluster`, `Node → Pod`, `VM → DockerContainer` | Captures hosting relationships across infrastructure layers. |
+| `CONTAINS` | `Cluster → Node/Pod/Service`, `Pod → Container` | Represents hierarchical membership inside the cluster. |
+| `HAS_RESOURCE_USAGE` | `Cluster → ResourceUsage` | Links a cluster to the raw metrics snapshot. |
+| `RUNS_PROCESS` | `DockerContainer → Process` | Shows which processes run inside each container. |
+| `HAS_CONNECTION` | `DockerContainer → NetworkConnection` | Lists network connections initiated within a container. |
+| `CONNECTS_TO` | `NetworkConnection → ExternalIP` | Identifies the public IP reached by a connection. |
+| `HAS_OPEN_PORT` | `DockerContainer → OpenPort` | Enumerates open/exposed ports for a container. |
+| `HAS_USER` | `DockerContainer → ContainerUser` | Maps containers to observed user accounts. |
+| `PROCESS_USES` | `Process → NetworkConnection` | Connects a process to the network connections it owns. |
 
 ## Node Types
 
@@ -186,6 +200,138 @@ Represents aggregated cluster-level metrics.
 ---
 
 ### 8. ResourceUsage
+### 9. DockerContainer
+
+Represents a Docker container discovered by the security monitoring component.
+
+**Properties:**
+- `id` (String, Unique, Indexed) - Unique identifier: `docker_{container_id[:12]}_{vm_id}`
+- `name` (String) - Container name
+- `container_id` (String) - Full Docker container ID
+- `image` (String) - Image name and tag
+- `status` (String) - Container runtime status
+- `vm_id` (String) - Reference to VM hosting the container
+- `timestamp` (DateTime) - Timestamp when container info was first collected
+- `last_updated` (DateTime) - Last update timestamp (auto-generated)
+
+**Constraints:**
+- UNIQUE constraint on `id`
+
+**Indexes:**
+- Index on `id`
+
+---
+
+### 10. Process
+
+Represents a process running inside a Docker container.
+
+**Properties:**
+- `id` (String, Unique, Indexed) - Unique identifier: `process_{pid}_{docker_container_id}`
+- `pid` (Integer) - Process ID
+- `user` (String) - Username running the process
+- `cpu_percent` (Float) - CPU usage percentage
+- `memory_percent` (Float) - Memory usage percentage
+- `memory_kb` (Float) - Memory consumption in KB
+- `command` (String) - Command line (trimmed to 500 chars)
+- `start_time` (String) - Process start time
+- `container_id` (String) - Reference to parent Docker container
+- `timestamp` (DateTime) - Timestamp when process info was collected
+- `last_updated` (DateTime) - Last update timestamp (auto-generated)
+
+**Constraints:**
+- UNIQUE constraint on `id`
+
+**Indexes:**
+- Index on `id`
+
+---
+
+### 11. NetworkConnection
+
+Represents a network connection made by a process inside a Docker container.
+
+**Properties:**
+- `id` (String, Unique, Indexed) - Unique identifier built from protocol, endpoints, and container
+- `protocol` (String) - Protocol (TCP/UDP/etc.)
+- `local_address` (String) - Local IP address
+- `local_port` (Integer) - Local port
+- `remote_address` (String) - Remote IP address
+- `remote_port` (Integer) - Remote port
+- `state` (String) - Connection state
+- `process_name` (String) - Name of owning process
+- `pid` (Integer, Optional) - Process ID (if known)
+- `container_id` (String) - Reference to parent Docker container
+- `timestamp` (DateTime) - Timestamp when connection info was collected
+- `last_updated` (DateTime) - Last update timestamp (auto-generated)
+
+**Constraints:**
+- UNIQUE constraint on `id`
+
+**Indexes:**
+- Index on `id`
+
+---
+
+### 12. ExternalIP
+
+Represents an external IP that a container connects to.
+
+**Properties:**
+- `id` (String, Unique, Indexed) - Unique identifier: `ip_{address}`
+- `address` (String) - IP address
+- `is_private` (Boolean) - Indicates if IP is private (defaults to false)
+- `timestamp` (DateTime) - Timestamp when IP was first recorded
+- `last_seen` (DateTime) - Last time the IP was observed
+
+**Constraints:**
+- UNIQUE constraint on `id`
+
+**Indexes:**
+- Index on `id`
+
+---
+
+### 13. OpenPort
+
+Represents an open port exposed by a Docker container.
+
+**Properties:**
+- `id` (String, Unique, Indexed) - `port_{protocol}_{port}_{docker_container_id}`
+- `protocol` (String) - Protocol (TCP/UDP/etc.)
+- `address` (String) - IP address bound to the port
+- `port` (Integer) - Port number
+- `state` (String) - Port state
+- `container_id` (String) - Reference to parent Docker container
+- `timestamp` (DateTime) - Timestamp when port info was collected
+- `last_updated` (DateTime) - Last update timestamp (auto-generated)
+
+**Constraints:**
+- UNIQUE constraint on `id`
+
+**Indexes:**
+- Index on `id`
+
+---
+
+### 14. ContainerUser
+
+Represents a user account observed inside a Docker container.
+
+**Properties:**
+- `id` (String, Unique, Indexed) - `user_{username}_{docker_container_id}`
+- `username` (String) - Username inside the container
+- `container_id` (String) - Reference to parent Docker container
+- `timestamp` (DateTime) - Timestamp when user info was collected
+- `last_updated` (DateTime) - Last update timestamp (auto-generated)
+
+**Constraints:**
+- UNIQUE constraint on `id`
+
+**Indexes:**
+- Index on `id`
+
+---
 
 Stores raw resource usage data from metrics-server.
 
@@ -208,71 +354,51 @@ Stores raw resource usage data from metrics-server.
 
 ### 1. HOSTS
 
-**Direction:** `VM` → `Cluster`
+**Directions:**
+- `VM` → `Cluster`
+- `Node` → `Pod`
+- `VM` → `DockerContainer`
 
-**Description:** Indicates that a VM hosts a Kubernetes cluster.
+**Description:** Same relationship type reused to indicate hosting at different infrastructure layers.
 
 **Properties:** None
 
 **Example:**
 ```cypher
-(vm:VM {id: "vm_hostname_20240101_120000"})-[:HOSTS]->(cluster:Cluster {id: "cluster_default_vm_id"})
+(vm:VM {id: "vm_hostname"})-[:HOSTS]->(cluster:Cluster {id: "cluster_default_vm_hostname"})
+(node:Node {id: "node_node1_cluster_id"})-[:HOSTS]->(pod:Pod {id: "pod_app1_default_cluster_id"})
+(vm:VM {id: "vm_hostname"})-[:HOSTS]->(dc:DockerContainer {id: "docker_cid_vm_hostname"})
 ```
 
 ---
 
 ### 2. CONTAINS
 
-**Direction:** `Cluster` → `Node`, `Cluster` → `Pod`, `Cluster` → `Service`
+**Directions:**
+- `Cluster` → `Node`
+- `Cluster` → `Pod`
+- `Cluster` → `Service`
+- `Pod` → `Container`
 
-**Description:** Indicates that a cluster contains nodes, pods, or services.
+**Description:** Indicates hierarchical containment within the Kubernetes cluster.
 
 **Properties:** None
 
 **Example:**
 ```cypher
 (cluster:Cluster {id: "cluster_default_vm_id"})-[:CONTAINS]->(node:Node {id: "node_node1_cluster_id"})
-(cluster:Cluster {id: "cluster_default_vm_id"})-[:CONTAINS]->(pod:Pod {id: "pod_app1_default_cluster_id"})
-(cluster:Cluster {id: "cluster_default_vm_id"})-[:CONTAINS]->(service:Service {id: "service_svc1_default_cluster_id"})
-```
-
----
-
-### 3. HOSTS
-
-**Direction:** `Node` → `Pod`
-
-**Description:** Indicates that a node hosts (runs) a pod.
-
-**Properties:** None
-
-**Example:**
-```cypher
-(node:Node {id: "node_node1_cluster_id"})-[:HOSTS]->(pod:Pod {id: "pod_app1_default_cluster_id"})
-```
-
----
-
-### 4. CONTAINS
-
-**Direction:** `Pod` → `Container`
-
-**Description:** Indicates that a pod contains a container.
-
-**Properties:** None
-
-**Example:**
-```cypher
+(cluster)-[:CONTAINS]->(pod:Pod {id: "pod_app1_default_cluster_id"})
+(cluster)-[:CONTAINS]->(service:Service {id: "service_svc1_default_cluster_id"})
 (pod:Pod {id: "pod_app1_default_cluster_id"})-[:CONTAINS]->(container:Container {id: "container_app_container_pod_app1_default_cluster_id"})
 ```
 
 ---
 
-### 5. HAS_RESOURCE_USAGE
+### 3. HAS_RESOURCE_USAGE
 
 **Direction:** `Cluster` → `ResourceUsage`
 
-**Description:** Links a cluster to its resource usage metrics.
+**Description:** Links a cluster to its raw metrics-server snapshot.
 
 **Properties:** None
 
@@ -283,20 +409,117 @@ Stores raw resource usage data from metrics-server.
 
 ---
 
+### 4. RUNS_PROCESS
+
+**Direction:** `DockerContainer` → `Process`
+
+**Description:** Associates each Docker container with the processes observed inside it.
+
+**Properties:** None
+
+**Example:**
+```cypher
+(dc:DockerContainer {id: "docker_cid_vm"})-[:RUNS_PROCESS]->(pr:Process {id: "process_123_docker_cid_vm"})
+```
+
+---
+
+### 5. HAS_CONNECTION
+
+**Direction:** `DockerContainer` → `NetworkConnection`
+
+**Description:** Captures network connections initiated within a container.
+
+**Properties:** None
+
+**Example:**
+```cypher
+(dc:DockerContainer {id: "docker_cid_vm"})-[:HAS_CONNECTION]->(nc:NetworkConnection {id: "conn_tcp_10.0.0.1_80_8.8.8.8_443_docker_cid_vm"})
+```
+
+---
+
+### 6. CONNECTS_TO
+
+**Direction:** `NetworkConnection` → `ExternalIP`
+
+**Description:** Records which external IPs are contacted by a given connection (only for public IPs).
+
+**Properties:** None
+
+**Example:**
+```cypher
+(nc:NetworkConnection {id: "conn_tcp..."})-[:CONNECTS_TO]->(eip:ExternalIP {id: "ip_8.8.8.8"})
+```
+
+---
+
+### 7. HAS_OPEN_PORT
+
+**Direction:** `DockerContainer` → `OpenPort`
+
+**Description:** Lists ports exposed by a container.
+
+**Properties:** None
+
+**Example:**
+```cypher
+(dc:DockerContainer {id: "docker_cid_vm"})-[:HAS_OPEN_PORT]->(op:OpenPort {id: "port_tcp_443_docker_cid_vm"})
+```
+
+---
+
+### 8. HAS_USER
+
+**Direction:** `DockerContainer` → `ContainerUser`
+
+**Description:** Maps containers to user accounts discovered within them.
+
+**Properties:** None
+
+**Example:**
+```cypher
+(dc:DockerContainer {id: "docker_cid_vm"})-[:HAS_USER]->(cu:ContainerUser {id: "user_root_docker_cid_vm"})
+```
+
+---
+
+### 9. PROCESS_USES
+
+**Direction:** `Process` → `NetworkConnection`
+
+**Description:** Connects a process to the network connections it owns (when PID mapping is available).
+
+**Properties:** None
+
+**Example:**
+```cypher
+(pr:Process {id: "process_123_docker_cid_vm"})-[:PROCESS_USES]->(nc:NetworkConnection {id: "conn_tcp..."})
+```
+
+---
+
 ## Schema Structure Diagram
 
 ```
 VM
- └─[:HOSTS]→ Cluster
-              ├─[:CONTAINS]→ Node
-              │   └─[:HOSTS]→ Pod
-              │       └─[:CONTAINS]→ Container
-              ├─[:CONTAINS]→ Pod
-              │   └─[:CONTAINS]→ Container
-              ├─[:CONTAINS]→ Service
-              └─[:HAS_RESOURCE_USAGE]→ ResourceUsage
-
-ClusterMetrics (related via cluster_id property)
+ ├─[:HOSTS]→ Cluster
+ │            ├─[:CONTAINS]→ Node
+ │            │   └─[:HOSTS]→ Pod
+ │            │       └─[:CONTAINS]→ Container
+ │            ├─[:CONTAINS]→ Pod
+ │            ├─[:CONTAINS]→ Service
+ │            └─[:HAS_RESOURCE_USAGE]→ ResourceUsage
+ │
+ │ ClusterMetrics (linked via shared cluster_id property, no explicit relationship)
+ │
+ └─[:HOSTS]→ DockerContainer
+              ├─[:RUNS_PROCESS]→ Process
+              │                   └─[:PROCESS_USES]→ NetworkConnection
+              │                                         └─[:CONNECTS_TO]→ ExternalIP
+              ├─[:HAS_CONNECTION]→ NetworkConnection
+              ├─[:HAS_OPEN_PORT]→ OpenPort
+              └─[:HAS_USER]→ ContainerUser
 ```
 
 ## Indexes
@@ -310,6 +533,12 @@ All indexes are created for performance optimization:
 5. **service_id_index** - Index on `Service.id`
 6. **container_id_index** - Index on `Container.id`
 7. **resource_usage_cluster_index** - Index on `ResourceUsage.cluster_id`
+8. **docker_container_id_index** - Index on `DockerContainer.id`
+9. **process_id_index** - Index on `Process.id`
+10. **network_connection_id_index** - Index on `NetworkConnection.id`
+11. **external_ip_id_index** - Index on `ExternalIP.id`
+12. **open_port_id_index** - Index on `OpenPort.id`
+13. **container_user_id_index** - Index on `ContainerUser.id`
 
 ## Constraints
 
@@ -322,6 +551,12 @@ All constraints enforce uniqueness:
 5. **service_id_unique** - UNIQUE constraint on `Service.id`
 6. **container_id_unique** - UNIQUE constraint on `Container.id`
 7. **resource_usage_cluster_unique** - UNIQUE constraint on `ResourceUsage.cluster_id`
+8. **docker_container_id_unique** - UNIQUE constraint on `DockerContainer.id`
+9. **process_id_unique** - UNIQUE constraint on `Process.id`
+10. **network_connection_id_unique** - UNIQUE constraint on `NetworkConnection.id`
+11. **external_ip_id_unique** - UNIQUE constraint on `ExternalIP.id`
+12. **open_port_id_unique** - UNIQUE constraint on `OpenPort.id`
+13. **container_user_id_unique** - UNIQUE constraint on `ContainerUser.id`
 
 ## Data Types
 
@@ -344,9 +579,11 @@ All constraints enforce uniqueness:
    - All other `timestamp` properties: Neo4J DateTime type (auto-generated)
    - All `last_updated` properties: Neo4J DateTime type (auto-generated)
 
-4. **ID Generation**: All node IDs are generated using a pattern: `{type}_{identifiers}_{cluster_id_or_vm_id}` to ensure uniqueness across the graph.
+4. **ID Generation**: All node IDs follow `{type}_{identifiers}_{cluster_id_or_vm_id}` (Docker objects include truncated container IDs) to ensure uniqueness across the graph.
 
-5. **Relationships**: Relationships are created using `MERGE` to avoid duplicates if the same data is stored multiple times.
+5. **Relationships**: Relationships are created using `MERGE` to avoid duplicates if the same data is stored multiple times. The `HOSTS` and `CONTAINS` relationship types are deliberately reused across multiple entity pairs for readability.
+
+6. **Cluster Metrics Linking**: `ClusterMetrics` nodes are keyed by `cluster_id` but currently have no explicit relationship; consumers should join them via the shared property.
 
 ## Example Queries
 

@@ -346,7 +346,14 @@ def get_node_color(label):
         'Service': '#FECA57',
         'Container': '#FF9FF3',
         'ClusterMetrics': '#A8E6CF',
-        'ResourceUsage': '#FFA07A'
+        'ResourceUsage': '#FFA07A',
+        # Docker container nodes
+        'DockerContainer': '#9B59B6',
+        'Process': '#E74C3C',
+        'NetworkConnection': '#3498DB',
+        'ExternalIP': '#E67E22',
+        'OpenPort': '#F39C12',
+        'ContainerUser': '#1ABC9C'
     }
     return color_map.get(label, '#BDC3C7')
 
@@ -357,7 +364,14 @@ def get_edge_color(rel_type):
         'HOSTS': '#FF6B6B',
         'CONTAINS': '#4ECDC4',
         'HAS_RESOURCE_USAGE': '#FFA07A',
-        'RELATES_TO': '#95A5A6'
+        'RELATES_TO': '#95A5A6',
+        # Docker relationships
+        'RUNS_PROCESS': '#E74C3C',
+        'HAS_CONNECTION': '#3498DB',
+        'CONNECTS_TO': '#E67E22',
+        'HAS_OPEN_PORT': '#F39C12',
+        'HAS_USER': '#1ABC9C',
+        'PROCESS_USES': '#8E44AD'
     }
     return color_map.get(rel_type, '#95A5A6')
 
@@ -417,6 +431,40 @@ def get_node_label(props, node_type):
             image_short = image.split('/')[-1][:20] if len(image) > 20 else image
             return f"{name}\n{image_short}"
         return name
+    
+    elif node_type == 'DockerContainer':
+        image = props.get('image', '')
+        status = props.get('status', '')
+        if image:
+            image_short = image.split('/')[-1][:15] if len(image) > 15 else image
+            return f"{name}\n🐳 {image_short[:15]}"
+        return f"{name}\n🐳"
+    
+    elif node_type == 'Process':
+        cpu = props.get('cpu_percent', 0)
+        mem = props.get('memory_percent', 0)
+        if cpu or mem:
+            return f"PID: {props.get('pid', 'N/A')}\nCPU: {cpu:.1f}%"
+        return f"PID: {props.get('pid', 'N/A')}"
+    
+    elif node_type == 'NetworkConnection':
+        protocol = props.get('protocol', '')
+        local_port = props.get('local_port', '')
+        remote_addr = props.get('remote_address', '')
+        if remote_addr and remote_addr not in ['*', '0.0.0.0', '::']:
+            return f"{protocol}:{local_port}\n→ {remote_addr[:15]}"
+        return f"{protocol}:{local_port}"
+    
+    elif node_type == 'ExternalIP':
+        return f"🌐 {props.get('address', 'N/A')}"
+    
+    elif node_type == 'OpenPort':
+        protocol = props.get('protocol', '')
+        port = props.get('port', '')
+        return f"{protocol}/{port}"
+    
+    elif node_type == 'ContainerUser':
+        return f"👤 {props.get('username', 'N/A')}"
     
     elif node_type == 'ClusterMetrics':
         total_pods = props.get('total_pods', 0)
@@ -640,6 +688,85 @@ def get_node_tooltip(props, node_type):
             lines.append(f"🖥️  Node Metrics: Available")
         if 'cluster_id' in props:
             lines.append(f"🏢 Cluster ID: {props['cluster_id']}")
+    
+    # DockerContainer-specific information
+    elif node_type == 'DockerContainer':
+        if 'image' in props:
+            lines.append(f"🐳 Image: {props['image']}")
+        if 'status' in props:
+            lines.append(f"📊 Status: {props['status']}")
+        if 'container_id' in props:
+            lines.append(f"🆔 Container ID: {props['container_id'][:12]}")
+        if 'vm_id' in props:
+            lines.append(f"🖥️  VM ID: {props['vm_id']}")
+    
+    # Process-specific information
+    elif node_type == 'Process':
+        if 'pid' in props:
+            lines.append(f"🆔 PID: {props['pid']}")
+        if 'user' in props:
+            lines.append(f"👤 User: {props['user']}")
+        if 'cpu_percent' in props:
+            lines.append(f"⚡ CPU: {props['cpu_percent']:.2f}%")
+        if 'memory_percent' in props:
+            lines.append(f"💾 Memory: {props['memory_percent']:.2f}%")
+        if 'memory_kb' in props:
+            lines.append(f"💾 Memory (KB): {props['memory_kb']}")
+        if 'command' in props:
+            cmd = props['command'][:100] if len(props['command']) > 100 else props['command']
+            lines.append(f"💻 Command: {cmd}")
+        if 'start_time' in props:
+            lines.append(f"🕐 Start Time: {props['start_time']}")
+        if 'container_id' in props:
+            lines.append(f"🐳 Container ID: {props['container_id']}")
+    
+    # NetworkConnection-specific information
+    elif node_type == 'NetworkConnection':
+        if 'protocol' in props:
+            lines.append(f"🔌 Protocol: {props['protocol']}")
+        if 'local_address' in props and 'local_port' in props:
+            lines.append(f"📍 Local: {props['local_address']}:{props['local_port']}")
+        if 'remote_address' in props and 'remote_port' in props:
+            lines.append(f"🌐 Remote: {props['remote_address']}:{props['remote_port']}")
+        if 'state' in props:
+            lines.append(f"📊 State: {props['state']}")
+        if 'process_name' in props:
+            lines.append(f"💻 Process: {props['process_name']}")
+        if 'pid' in props:
+            lines.append(f"🆔 PID: {props['pid']}")
+        if 'container_id' in props:
+            lines.append(f"🐳 Container ID: {props['container_id']}")
+    
+    # ExternalIP-specific information
+    elif node_type == 'ExternalIP':
+        if 'address' in props:
+            lines.append(f"🌐 IP Address: {props['address']}")
+        if 'is_private' in props:
+            lines.append(f"🔒 Private: {props['is_private']}")
+        if 'timestamp' in props:
+            lines.append(f"🕐 First Seen: {props['timestamp']}")
+        if 'last_seen' in props:
+            lines.append(f"🔄 Last Seen: {props['last_seen']}")
+    
+    # OpenPort-specific information
+    elif node_type == 'OpenPort':
+        if 'protocol' in props:
+            lines.append(f"🔌 Protocol: {props['protocol']}")
+        if 'address' in props:
+            lines.append(f"📍 Address: {props['address']}")
+        if 'port' in props:
+            lines.append(f"🔌 Port: {props['port']}")
+        if 'state' in props:
+            lines.append(f"📊 State: {props['state']}")
+        if 'container_id' in props:
+            lines.append(f"🐳 Container ID: {props['container_id']}")
+    
+    # ContainerUser-specific information
+    elif node_type == 'ContainerUser':
+        if 'username' in props:
+            lines.append(f"👤 Username: {props['username']}")
+        if 'container_id' in props:
+            lines.append(f"🐳 Container ID: {props['container_id']}")
     
     # Timestamp information (common to all)
     if 'timestamp' in props and node_type != 'VM' and node_type != 'ResourceUsage':
