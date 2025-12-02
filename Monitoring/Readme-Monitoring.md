@@ -11,7 +11,7 @@ An interactive web-based visualization tool for exploring Neo4j graph data store
 - **Export**: Export graph data as JSON
 - **Statistics**: Real-time counts of nodes and edges
 - **Responsive Design**: Modern, gradient-based UI
-- **Color-coded Nodes**: Different colors for VM, Cluster, Node, Pod, Service, Container
+- **Color-coded Nodes**: Different colors for ComputeNode, Cluster, Node, Pod, Service, Container
 
 ## 📋 Prerequisites
 
@@ -218,7 +218,7 @@ docker-compose logs -f dashboard
 
 The visualization uses color-coding to distinguish node types:
 
-- **VM** (Red): Virtual machines hosting clusters
+- **ComputeNode** (Red): Compute nodes (VMs or physical machines) hosting clusters
 - **Cluster** (Teal): Kubernetes clusters
 - **Node** (Blue): Kubernetes nodes
 - **Pod** (Green): Running pods

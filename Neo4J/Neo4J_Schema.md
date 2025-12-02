@@ -4,22 +4,22 @@ This document describes the complete Neo4J graph database schema used by MoniKub
 
 ## Overview
 
-The schema represents a comprehensive graph model of Kubernetes infrastructure, tracking VMs, clusters, nodes, pods, containers, services, and their relationships. It also stores resource usage metrics and cluster-level statistics.
+The schema represents a comprehensive graph model of Kubernetes infrastructure, tracking Compute Nodes (VMs or physical machines), clusters, nodes, pods, containers, services, and their relationships. It also stores resource usage metrics and cluster-level statistics.
 
 ### Schema Overview
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| **Node Types** | 14 | VM, Cluster, Node, Pod, Container, Service, ClusterMetrics, ResourceUsage, DockerContainer, Process, NetworkConnection, ExternalIP, OpenPort, ContainerUser |
+| **Node Types** | 14 | ComputeNode, Cluster, Node, Pod, Container, Service, ClusterMetrics, ResourceUsage, DockerContainer, Process, NetworkConnection, ExternalIP, OpenPort, ContainerUser |
 | **Relationships** | 9 | HOSTS, CONTAINS, HAS_RESOURCE_USAGE, RUNS_PROCESS, HAS_CONNECTION, CONNECTS_TO, HAS_OPEN_PORT, HAS_USER, PROCESS_USES |
-| **Indexes** | 13 | Performance indexes on Kubernetes and Docker entities |
+| **Indexes** | 14 | Performance indexes on Kubernetes and Docker entities (including namespace index) |
 | **Constraints** | 13 | Uniqueness constraints on all node IDs |
 
 #### Relationship Quick Reference
 
 | Relationship | Direction(s) | Meaning |
 |--------------|--------------|---------|
-| `HOSTS` | `VM → Cluster`, `Node → Pod`, `VM → DockerContainer` | Captures hosting relationships across infrastructure layers. |
+| `HOSTS` | `ComputeNode → Cluster`, `Node → Pod`, `ComputeNode → DockerContainer` | Captures hosting relationships across infrastructure layers. |
 | `CONTAINS` | `Cluster → Node/Pod/Service`, `Pod → Container` | Represents hierarchical membership inside the cluster. |
 | `HAS_RESOURCE_USAGE` | `Cluster → ResourceUsage` | Links a cluster to the raw metrics snapshot. |
 | `RUNS_PROCESS` | `DockerContainer → Process` | Shows which processes run inside each container. |
@@ -31,17 +31,20 @@ The schema represents a comprehensive graph model of Kubernetes infrastructure, 
 
 ## Node Types
 
-### 1. VM (Virtual Machine)
+### 1. ComputeNode
 
-Represents the physical or virtual machine where the monitoring tool runs.
+Represents the compute node (VM or physical machine) where the monitoring tool runs.
 
 **Properties:**
-- `id` (String, Unique, Indexed) - Unique identifier: `vm_{hostname}_{timestamp}`
-- `hostname` (String) - Hostname of the VM
-- `ip_addresses` (List[String]) - List of IP addresses assigned to the VM
+- `id` (String, Unique, Indexed) - Unique identifier: `compute_node_{hostname}_{namespace}`
+- `hostname` (String) - Hostname of the compute node
+- `ip_addresses` (List[String]) - List of IP addresses assigned to the compute node
 - `platform` (String) - Operating system platform information
-- `python_version` (String) - Python version running on the VM
-- `timestamp` (String) - ISO timestamp when VM information was first collected
+- `python_version` (String) - Python version running on the compute node
+- `node_type` (String) - Type of compute node: `VM` or `Physical`
+- `virtualization_type` (String) - Virtualization type if VM: `VMware`, `KVM`, `VirtualBox`, `QEMU`, `Hyper-V`, `Xen`, `Physical`, or `Unknown`
+- `namespace` (String, Indexed) - Namespace/organization the compute node belongs to
+- `timestamp` (String) - ISO timestamp when compute node information was first collected
 - `last_updated` (DateTime) - Last update timestamp (auto-generated)
 
 **Constraints:**
@@ -49,6 +52,7 @@ Represents the physical or virtual machine where the monitoring tool runs.
 
 **Indexes:**
 - Index on `id`
+- Index on `namespace`
 
 ---
 
@@ -57,9 +61,10 @@ Represents the physical or virtual machine where the monitoring tool runs.
 Represents a Kubernetes cluster.
 
 **Properties:**
-- `id` (String, Unique, Indexed) - Unique identifier: `cluster_{context}_{vm_id}`
+- `id` (String, Unique, Indexed) - Unique identifier: `cluster_{context}_{compute_node_id}`
 - `context` (String) - Kubernetes context name
-- `vm_id` (String) - Reference to the VM that hosts this cluster
+- `compute_node_id` (String) - Reference to the Compute Node that hosts this cluster
+- `namespace` (String) - Namespace/organization the cluster belongs to
 - `cluster_info` (String/JSON) - JSON string containing cluster information from `kubectl cluster-info` and `kubectl version`
 - `available_contexts` (List[String]) - List of all available Kubernetes contexts
 - `timestamp` (DateTime) - Timestamp when cluster info was collected
@@ -205,12 +210,13 @@ Represents aggregated cluster-level metrics.
 Represents a Docker container discovered by the security monitoring component.
 
 **Properties:**
-- `id` (String, Unique, Indexed) - Unique identifier: `docker_{container_id[:12]}_{vm_id}`
+- `id` (String, Unique, Indexed) - Unique identifier: `docker_{container_id[:12]}_{compute_node_id}`
 - `name` (String) - Container name
 - `container_id` (String) - Full Docker container ID
 - `image` (String) - Image name and tag
 - `status` (String) - Container runtime status
-- `vm_id` (String) - Reference to VM hosting the container
+- `compute_node_id` (String) - Reference to Compute Node hosting the container
+- `namespace` (String) - Namespace/organization the container belongs to
 - `timestamp` (DateTime) - Timestamp when container info was first collected
 - `last_updated` (DateTime) - Last update timestamp (auto-generated)
 
@@ -355,9 +361,9 @@ Stores raw resource usage data from metrics-server.
 ### 1. HOSTS
 
 **Directions:**
-- `VM` → `Cluster`
+- `ComputeNode` → `Cluster`
 - `Node` → `Pod`
-- `VM` → `DockerContainer`
+- `ComputeNode` → `DockerContainer`
 
 **Description:** Same relationship type reused to indicate hosting at different infrastructure layers.
 
@@ -365,9 +371,9 @@ Stores raw resource usage data from metrics-server.
 
 **Example:**
 ```cypher
-(vm:VM {id: "vm_hostname"})-[:HOSTS]->(cluster:Cluster {id: "cluster_default_vm_hostname"})
+(cn:ComputeNode {id: "compute_node_hostname_default"})-[:HOSTS]->(cluster:Cluster {id: "cluster_default_compute_node_hostname_default"})
 (node:Node {id: "node_node1_cluster_id"})-[:HOSTS]->(pod:Pod {id: "pod_app1_default_cluster_id"})
-(vm:VM {id: "vm_hostname"})-[:HOSTS]->(dc:DockerContainer {id: "docker_cid_vm_hostname"})
+(cn:ComputeNode {id: "compute_node_hostname_default"})-[:HOSTS]->(dc:DockerContainer {id: "docker_cid_compute_node_hostname_default"})
 ```
 
 ---
@@ -386,7 +392,7 @@ Stores raw resource usage data from metrics-server.
 
 **Example:**
 ```cypher
-(cluster:Cluster {id: "cluster_default_vm_id"})-[:CONTAINS]->(node:Node {id: "node_node1_cluster_id"})
+(cluster:Cluster {id: "cluster_default_compute_node_id"})-[:CONTAINS]->(node:Node {id: "node_node1_cluster_id"})
 (cluster)-[:CONTAINS]->(pod:Pod {id: "pod_app1_default_cluster_id"})
 (cluster)-[:CONTAINS]->(service:Service {id: "service_svc1_default_cluster_id"})
 (pod:Pod {id: "pod_app1_default_cluster_id"})-[:CONTAINS]->(container:Container {id: "container_app_container_pod_app1_default_cluster_id"})
@@ -404,7 +410,7 @@ Stores raw resource usage data from metrics-server.
 
 **Example:**
 ```cypher
-(cluster:Cluster {id: "cluster_default_vm_id"})-[:HAS_RESOURCE_USAGE]->(ru:ResourceUsage {cluster_id: "cluster_default_vm_id"})
+(cluster:Cluster {id: "cluster_default_compute_node_id"})-[:HAS_RESOURCE_USAGE]->(ru:ResourceUsage {cluster_id: "cluster_default_compute_node_id"})
 ```
 
 ---
@@ -419,7 +425,7 @@ Stores raw resource usage data from metrics-server.
 
 **Example:**
 ```cypher
-(dc:DockerContainer {id: "docker_cid_vm"})-[:RUNS_PROCESS]->(pr:Process {id: "process_123_docker_cid_vm"})
+(dc:DockerContainer {id: "docker_cid_compute_node"})-[:RUNS_PROCESS]->(pr:Process {id: "process_123_docker_cid_compute_node"})
 ```
 
 ---
@@ -434,7 +440,7 @@ Stores raw resource usage data from metrics-server.
 
 **Example:**
 ```cypher
-(dc:DockerContainer {id: "docker_cid_vm"})-[:HAS_CONNECTION]->(nc:NetworkConnection {id: "conn_tcp_10.0.0.1_80_8.8.8.8_443_docker_cid_vm"})
+(dc:DockerContainer {id: "docker_cid_compute_node"})-[:HAS_CONNECTION]->(nc:NetworkConnection {id: "conn_tcp_10.0.0.1_80_8.8.8.8_443_docker_cid_compute_node"})
 ```
 
 ---
@@ -464,7 +470,7 @@ Stores raw resource usage data from metrics-server.
 
 **Example:**
 ```cypher
-(dc:DockerContainer {id: "docker_cid_vm"})-[:HAS_OPEN_PORT]->(op:OpenPort {id: "port_tcp_443_docker_cid_vm"})
+(dc:DockerContainer {id: "docker_cid_compute_node"})-[:HAS_OPEN_PORT]->(op:OpenPort {id: "port_tcp_443_docker_cid_compute_node"})
 ```
 
 ---
@@ -479,7 +485,7 @@ Stores raw resource usage data from metrics-server.
 
 **Example:**
 ```cypher
-(dc:DockerContainer {id: "docker_cid_vm"})-[:HAS_USER]->(cu:ContainerUser {id: "user_root_docker_cid_vm"})
+(dc:DockerContainer {id: "docker_cid_compute_node"})-[:HAS_USER]->(cu:ContainerUser {id: "user_root_docker_cid_compute_node"})
 ```
 
 ---
@@ -494,7 +500,7 @@ Stores raw resource usage data from metrics-server.
 
 **Example:**
 ```cypher
-(pr:Process {id: "process_123_docker_cid_vm"})-[:PROCESS_USES]->(nc:NetworkConnection {id: "conn_tcp..."})
+(pr:Process {id: "process_123_docker_cid_compute_node"})-[:PROCESS_USES]->(nc:NetworkConnection {id: "conn_tcp..."})
 ```
 
 ---
@@ -502,7 +508,7 @@ Stores raw resource usage data from metrics-server.
 ## Schema Structure Diagram
 
 ```
-VM
+ComputeNode
  ├─[:HOSTS]→ Cluster
  │            ├─[:CONTAINS]→ Node
  │            │   └─[:HOSTS]→ Pod
@@ -526,25 +532,26 @@ VM
 
 All indexes are created for performance optimization:
 
-1. **vm_id_index** - Index on `VM.id`
-2. **cluster_id_index** - Index on `Cluster.id`
-3. **node_id_index** - Index on `Node.id`
-4. **pod_id_index** - Index on `Pod.id`
-5. **service_id_index** - Index on `Service.id`
-6. **container_id_index** - Index on `Container.id`
-7. **resource_usage_cluster_index** - Index on `ResourceUsage.cluster_id`
-8. **docker_container_id_index** - Index on `DockerContainer.id`
-9. **process_id_index** - Index on `Process.id`
-10. **network_connection_id_index** - Index on `NetworkConnection.id`
-11. **external_ip_id_index** - Index on `ExternalIP.id`
-12. **open_port_id_index** - Index on `OpenPort.id`
-13. **container_user_id_index** - Index on `ContainerUser.id`
+1. **compute_node_id_index** - Index on `ComputeNode.id`
+2. **compute_node_namespace_index** - Index on `ComputeNode.namespace`
+3. **cluster_id_index** - Index on `Cluster.id`
+4. **node_id_index** - Index on `Node.id`
+5. **pod_id_index** - Index on `Pod.id`
+6. **service_id_index** - Index on `Service.id`
+7. **container_id_index** - Index on `Container.id`
+8. **resource_usage_cluster_index** - Index on `ResourceUsage.cluster_id`
+9. **docker_container_id_index** - Index on `DockerContainer.id`
+10. **process_id_index** - Index on `Process.id`
+11. **network_connection_id_index** - Index on `NetworkConnection.id`
+12. **external_ip_id_index** - Index on `ExternalIP.id`
+13. **open_port_id_index** - Index on `OpenPort.id`
+14. **container_user_id_index** - Index on `ContainerUser.id`
 
 ## Constraints
 
 All constraints enforce uniqueness:
 
-1. **vm_id_unique** - UNIQUE constraint on `VM.id`
+1. **compute_node_id_unique** - UNIQUE constraint on `ComputeNode.id`
 2. **cluster_id_unique** - UNIQUE constraint on `Cluster.id`
 3. **node_id_unique** - UNIQUE constraint on `Node.id`
 4. **pod_id_unique** - UNIQUE constraint on `Pod.id`
@@ -574,12 +581,21 @@ All constraints enforce uniqueness:
 2. **JSON Storage**: Some properties like `cluster_info`, `ports`, `selector`, `pod_metrics`, and `node_metrics` are stored as JSON strings. These need to be parsed when querying.
 
 3. **Timestamps**: The `timestamp` property varies in type:
-   - `VM.timestamp`: ISO string format
+   - `ComputeNode.timestamp`: ISO string format
    - `ResourceUsage.timestamp`: ISO string format
    - All other `timestamp` properties: Neo4J DateTime type (auto-generated)
    - All `last_updated` properties: Neo4J DateTime type (auto-generated)
 
-4. **ID Generation**: All node IDs follow `{type}_{identifiers}_{cluster_id_or_vm_id}` (Docker objects include truncated container IDs) to ensure uniqueness across the graph.
+4. **ID Generation**: All node IDs follow `{type}_{identifiers}_{cluster_id_or_compute_node_id}` (Docker objects include truncated container IDs) to ensure uniqueness across the graph.
+
+5. **Compute Node Detection**: The `node_type` field is automatically detected using multiple methods:
+   - `systemd-detect-virt` command (most reliable)
+   - DMI product name (`/sys/class/dmi/id/product_name`)
+   - DMI system vendor (`/sys/class/dmi/id/sys_vendor`)
+   - CPU info hypervisor flags (`/proc/cpuinfo`)
+   - If none of these indicate virtualization, the node is marked as `Physical`
+
+6. **Namespace Support**: All compute nodes, clusters, and Docker containers include a `namespace` field for organizational grouping. Namespace can be set via environment variables (`KUBERNETES_NAMESPACE` or `NAMESPACE`) or defaults to `default`.
 
 5. **Relationships**: Relationships are created using `MERGE` to avoid duplicates if the same data is stored multiple times. The `HOSTS` and `CONTAINS` relationship types are deliberately reused across multiple entity pairs for readability.
 
@@ -587,21 +603,34 @@ All constraints enforce uniqueness:
 
 ## Example Queries
 
-### Get all clusters for a VM
+### Get all clusters for a Compute Node
 ```cypher
-MATCH (v:VM {id: $vm_id})-[:HOSTS]->(c:Cluster)
-RETURN c.id, c.context, c.timestamp
+MATCH (cn:ComputeNode {id: $compute_node_id})-[:HOSTS]->(c:Cluster)
+RETURN c.id, c.context, c.namespace, c.timestamp
+```
+
+### Get all Compute Nodes in a namespace
+```cypher
+MATCH (cn:ComputeNode {namespace: $namespace})
+RETURN cn.id, cn.hostname, cn.node_type, cn.virtualization_type
 ```
 
 ### Get complete infrastructure graph
 ```cypher
-MATCH (v:VM)-[:HOSTS]->(c:Cluster)
+MATCH (cn:ComputeNode)-[:HOSTS]->(c:Cluster)
 OPTIONAL MATCH (c)-[:CONTAINS]->(n:Node)
 OPTIONAL MATCH (c)-[:CONTAINS]->(p:Pod)
 OPTIONAL MATCH (c)-[:CONTAINS]->(s:Service)
 OPTIONAL MATCH (n)-[:HOSTS]->(p)
 OPTIONAL MATCH (p)-[:CONTAINS]->(ct:Container)
-RETURN v, c, n, p, s, ct
+RETURN cn, c, n, p, s, ct
+```
+
+### Get all VMs vs Physical machines
+```cypher
+MATCH (cn:ComputeNode)
+RETURN cn.node_type, count(cn) as count
+ORDER BY count DESC
 ```
 
 ### Get pods with high CPU usage

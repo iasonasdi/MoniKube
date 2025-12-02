@@ -322,7 +322,7 @@ def get_cluster_summary():
             OPTIONAL MATCH (c)-[:CONTAINS]->(s:Service)
             OPTIONAL MATCH (cm:ClusterMetrics)
             WHERE cm.cluster_id = c.id
-            RETURN c.id as cluster_id, c.context, c.vm_id, c.timestamp,
+            RETURN c.id as cluster_id, c.context, c.compute_node_id, c.namespace, c.timestamp,
                    count(DISTINCT n) as node_count,
                    count(DISTINCT p) as pod_count,
                    count(DISTINCT s) as service_count,
@@ -339,7 +339,7 @@ def get_cluster_summary():
 def get_node_color(label):
     """Get color for node based on label"""
     color_map = {
-        'VM': '#FF6B6B',
+        'ComputeNode': '#FF6B6B',
         'Cluster': '#4ECDC4',
         'Node': '#45B7D1',
         'Pod': '#96CEB4',
@@ -400,9 +400,11 @@ def get_node_label(props, node_type):
     """Generate enhanced label for node with key information"""
     name = props.get('name', 'Unknown')
     
-    if node_type == 'VM':
+    if node_type == 'ComputeNode':
         hostname = props.get('hostname', '')
-        return f"{hostname}\nVM"
+        node_type_str = props.get('node_type', 'ComputeNode')
+        namespace = props.get('namespace', 'default')
+        return f"{hostname}\n{node_type_str}\n[{namespace}]"
     
     elif node_type == 'Cluster':
         context = props.get('context', 'default')
@@ -486,10 +488,16 @@ def get_node_tooltip(props, node_type):
     if 'id' in props:
         lines.append(f"🆔 ID: {props['id']}")
     
-    # VM-specific information
-    if node_type == 'VM':
+    # ComputeNode-specific information
+    if node_type == 'ComputeNode':
         if 'hostname' in props:
             lines.append(f"💻 Hostname: {props['hostname']}")
+        if 'node_type' in props:
+            lines.append(f"🖥️  Type: {props['node_type']}")
+        if 'virtualization_type' in props and props.get('node_type') == 'VM':
+            lines.append(f"☁️  Virtualization: {props['virtualization_type']}")
+        if 'namespace' in props:
+            lines.append(f"📁 Namespace: {props['namespace']}")
         if 'ip_addresses' in props:
             ip_addresses = props['ip_addresses']
             if isinstance(ip_addresses, list) and ip_addresses:
@@ -525,8 +533,10 @@ def get_node_tooltip(props, node_type):
                         lines.append(f"📦 Kubernetes Version: {cluster_info.get('version', {}).get('serverVersion', {}).get('gitVersion', 'N/A')}")
             except:
                 pass
-        if 'vm_id' in props:
-            lines.append(f"🖥️  VM ID: {props['vm_id']}")
+        if 'compute_node_id' in props:
+            lines.append(f"🖥️  Compute Node ID: {props['compute_node_id']}")
+        if 'namespace' in props:
+            lines.append(f"📁 Namespace: {props['namespace']}")
     
     # Node-specific information
     elif node_type == 'Node':
@@ -697,8 +707,10 @@ def get_node_tooltip(props, node_type):
             lines.append(f"📊 Status: {props['status']}")
         if 'container_id' in props:
             lines.append(f"🆔 Container ID: {props['container_id'][:12]}")
-        if 'vm_id' in props:
-            lines.append(f"🖥️  VM ID: {props['vm_id']}")
+        if 'compute_node_id' in props:
+            lines.append(f"🖥️  Compute Node ID: {props['compute_node_id']}")
+        if 'namespace' in props:
+            lines.append(f"📁 Namespace: {props['namespace']}")
     
     # Process-specific information
     elif node_type == 'Process':
@@ -769,7 +781,7 @@ def get_node_tooltip(props, node_type):
             lines.append(f"🐳 Container ID: {props['container_id']}")
     
     # Timestamp information (common to all)
-    if 'timestamp' in props and node_type != 'VM' and node_type != 'ResourceUsage':
+    if 'timestamp' in props and node_type != 'ComputeNode' and node_type != 'ResourceUsage':
         lines.append(f"🕐 Collected: {props['timestamp']}")
     if 'last_updated' in props:
         lines.append(f"🔄 Last Updated: {props['last_updated']}")

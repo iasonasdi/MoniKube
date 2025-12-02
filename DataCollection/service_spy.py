@@ -9,6 +9,7 @@ import subprocess
 import json
 import logging
 import re
+import os
 from typing import Dict, List, Optional, Any, Set
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -52,15 +53,99 @@ class ContainerSecurityInfo:
     external_ips: Set[str]
     open_ports: List[Dict[str, Any]]
     users: Set[str]
+    namespace: str
     timestamp: str
 
 
 class DockerServiceSpy:
     """Service spy for Docker containers"""
     
-    def __init__(self):
+    def __init__(self, namespace: Optional[str] = None):
+        """
+        Initialize Docker Service Spy.
+        
+        Args:
+            namespace: Namespace for the compute node. If not provided, will try to get from environment.
+        """
         self.logger = self._setup_logger()
         self.containers_data: List[ContainerSecurityInfo] = []
+        # Get namespace from parameter, environment, or default
+        self.namespace = namespace or os.environ.get('KUBERNETES_NAMESPACE', os.environ.get('NAMESPACE', 'default'))
+    
+    def _is_valid_ip(self, ip_str: str) -> bool:
+        """
+        Validate if an IP address string is valid and complete.
+        Filters out broken/incomplete IPs like 'f:f:f:f:', ':::', etc.
+        
+        Args:
+            ip_str: IP address string to validate
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        if not ip_str or not isinstance(ip_str, str):
+            return False
+        
+        # Remove whitespace
+        ip_str = ip_str.strip()
+        
+        # Filter out obviously invalid patterns
+        if ip_str in ['', '*']:
+            return False
+        
+        # Check for incomplete IPv6 patterns (like f:f:f:f: or :::)
+        if ip_str.count(':') > 0:
+            # Check for patterns like "f:f:f:f:" (ends with colon but incomplete)
+            # This catches incomplete IPv6 addresses
+            if ip_str.endswith(':') and not ip_str.endswith('::'):
+                return False
+            # Check for multiple consecutive colons that aren't valid (like ::: or ::::)
+            # Valid IPv6 can have :: (double colon) for compression, but not ::: or more
+            if ':::' in ip_str:
+                return False
+            # Check for patterns with only colons (like :::: or :::)
+            if ip_str.replace(':', '').strip() == '':
+                return False
+            # Check for incomplete hex parts
+            parts = ip_str.split(':')
+            # Valid IPv6 should have at most 8 parts (or use :: compression)
+            # But we need to account for :: compression which creates empty parts
+            non_empty_parts = [p for p in parts if p]
+            if len(non_empty_parts) > 8:
+                return False
+            # Check each part is valid hex (if not empty)
+            for part in parts:
+                if part:  # Only check non-empty parts
+                    if not all(c in '0123456789abcdefABCDEF' for c in part):
+                        return False
+                    # Each part should be max 4 hex digits
+                    if len(part) > 4:
+                        return False
+        
+        # Check for incomplete IPv4 patterns
+        if ip_str.count('.') > 0:
+            parts = ip_str.split('.')
+            # IPv4 should have exactly 4 parts
+            if len(parts) != 4:
+                return False
+            # Check if any part is empty or invalid
+            for part in parts:
+                if not part or not part.isdigit():
+                    return False
+                try:
+                    num = int(part)
+                    if num < 0 or num > 255:
+                        return False
+                except ValueError:
+                    return False
+        
+        # Final validation: Try to parse with ipaddress library (most reliable check)
+        try:
+            ipaddress.ip_address(ip_str)
+            return True
+        except (ValueError, ipaddress.AddressValueError):
+            # If ipaddress can't parse it, it's invalid
+            return False
         
     def _setup_logger(self) -> logging.Logger:
         """Setup logging configuration"""
@@ -268,17 +353,31 @@ class DockerServiceSpy:
                     # Parse local address:port
                     if ':' in local:
                         local_addr, local_port = local.rsplit(':', 1)
-                        local_port = int(local_port)
+                        try:
+                            local_port = int(local_port)
+                        except ValueError:
+                            continue
                     else:
+                        continue
+                    
+                    # Validate local address
+                    if not self._is_valid_ip(local_addr):
                         continue
                     
                     # Parse remote address:port
                     if ':' in remote:
                         remote_addr, remote_port = remote.rsplit(':', 1)
-                        remote_port = int(remote_port)
+                        try:
+                            remote_port = int(remote_port)
+                        except ValueError:
+                            remote_port = 0
                     else:
                         remote_addr = remote
                         remote_port = 0
+                    
+                    # Validate remote address (allow empty for listening sockets)
+                    if remote_addr and not self._is_valid_ip(remote_addr):
+                        continue
                     
                     # Determine protocol from state or address format
                     protocol = 'tcp' if 'tcp' in state.lower() or 'ESTAB' in state else 'udp'
@@ -300,7 +399,7 @@ class DockerServiceSpy:
                         protocol=protocol,
                         local_address=local_addr,
                         local_port=local_port,
-                        remote_address=remote_addr,
+                        remote_address=remote_addr if remote_addr else '',
                         remote_port=remote_port,
                         state=state,
                         process_name=process_name,
@@ -333,16 +432,30 @@ class DockerServiceSpy:
                     # Parse addresses
                     if ':' in local:
                         local_addr, local_port = local.rsplit(':', 1)
-                        local_port = int(local_port)
+                        try:
+                            local_port = int(local_port)
+                        except ValueError:
+                            continue
                     else:
+                        continue
+                    
+                    # Validate local address
+                    if not self._is_valid_ip(local_addr):
                         continue
                     
                     if ':' in remote:
                         remote_addr, remote_port = remote.rsplit(':', 1)
-                        remote_port = int(remote_port)
+                        try:
+                            remote_port = int(remote_port)
+                        except ValueError:
+                            remote_port = 0
                     else:
                         remote_addr = remote
                         remote_port = 0
+                    
+                    # Validate remote address (allow empty for listening sockets)
+                    if remote_addr and not self._is_valid_ip(remote_addr):
+                        continue
                     
                     # Extract process info
                     process_name = None
@@ -357,7 +470,7 @@ class DockerServiceSpy:
                         protocol=protocol,
                         local_address=local_addr,
                         local_port=local_port,
-                        remote_address=remote_addr,
+                        remote_address=remote_addr if remote_addr else '',
                         remote_port=remote_port,
                         state=state,
                         process_name=process_name,
@@ -400,9 +513,10 @@ class DockerServiceSpy:
                 return False
         
         for conn in connections:
-            # Check remote address
-            if conn.remote_address and not is_private(conn.remote_address):
-                external_ips.add(conn.remote_address)
+            # Check remote address - validate first, then check if external
+            if conn.remote_address and self._is_valid_ip(conn.remote_address):
+                if not is_private(conn.remote_address):
+                    external_ips.add(conn.remote_address)
         
         return external_ips
     
@@ -430,12 +544,14 @@ class DockerServiceSpy:
                         
                         if ':' in local:
                             addr, port = local.rsplit(':', 1)
-                            ports.append({
-                                'protocol': protocol,
-                                'address': addr,
-                                'port': int(port),
-                                'state': state
-                            })
+                            # Validate IP address before adding
+                            if self._is_valid_ip(addr):
+                                ports.append({
+                                    'protocol': protocol,
+                                    'address': addr,
+                                    'port': int(port),
+                                    'state': state
+                                })
                     except (ValueError, IndexError):
                         continue
         
@@ -508,6 +624,7 @@ class DockerServiceSpy:
             external_ips=external_ips,
             open_ports=open_ports,
             users=users,
+            namespace=self.namespace,
             timestamp=datetime.now().isoformat()
         )
     

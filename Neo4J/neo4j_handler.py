@@ -7,6 +7,8 @@ Handles storage of Kubernetes monitoring data in Neo4J graph database.
 import json
 import socket
 import platform
+import os
+import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import asdict
@@ -55,7 +57,7 @@ class Neo4JHandler:
         self.database = database
         self.driver = None
         self.logger = self._setup_logging()
-        self.vm_identifier = self._get_vm_identifier()
+        self.compute_node_identifier = self._get_compute_node_identifier()
         
     def _setup_logging(self) -> logging.Logger:
         """Setup logging configuration"""
@@ -65,8 +67,108 @@ class Neo4JHandler:
         )
         return logging.getLogger(__name__)
     
-    def _get_vm_identifier(self) -> Dict[str, Any]:
-        """Get VM identifier information"""
+    def _detect_virtualization(self) -> Tuple[str, str]:
+        """
+        Detect if the system is running in a VM or on physical hardware.
+        
+        Returns:
+            Tuple[str, str]: (node_type, virtualization_type)
+            node_type: 'VM' or 'Physical'
+            virtualization_type: 'VMware', 'KVM', 'VirtualBox', 'QEMU', 'Hyper-V', 'Xen', 'Physical', 'Unknown'
+        """
+        node_type = 'Physical'
+        virt_type = 'Physical'
+        
+        try:
+            # Method 1: Check systemd-detect-virt (most reliable)
+            try:
+                result = subprocess.run(
+                    ['systemd-detect-virt'],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    virt_output = result.stdout.strip().lower()
+                    if virt_output != 'none':
+                        node_type = 'VM'
+                        virt_type = virt_output.capitalize()
+                        return (node_type, virt_type)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+            
+            # Method 2: Check DMI product name
+            try:
+                with open('/sys/class/dmi/id/product_name', 'r') as f:
+                    product_name = f.read().strip().lower()
+                    if any(virt in product_name for virt in ['vmware', 'virtualbox', 'kvm', 'qemu', 'xen', 'hyper-v', 'microsoft corporation']):
+                        node_type = 'VM'
+                        if 'vmware' in product_name:
+                            virt_type = 'VMware'
+                        elif 'virtualbox' in product_name:
+                            virt_type = 'VirtualBox'
+                        elif 'kvm' in product_name:
+                            virt_type = 'KVM'
+                        elif 'qemu' in product_name:
+                            virt_type = 'QEMU'
+                        elif 'xen' in product_name:
+                            virt_type = 'Xen'
+                        elif 'hyper-v' in product_name or 'microsoft' in product_name:
+                            virt_type = 'Hyper-V'
+                        else:
+                            virt_type = 'Unknown'
+                        return (node_type, virt_type)
+            except (FileNotFoundError, IOError):
+                pass
+            
+            # Method 3: Check DMI sys_vendor
+            try:
+                with open('/sys/class/dmi/id/sys_vendor', 'r') as f:
+                    sys_vendor = f.read().strip().lower()
+                    if any(virt in sys_vendor for virt in ['vmware', 'innotek', 'qemu', 'xen', 'microsoft corporation']):
+                        node_type = 'VM'
+                        if 'vmware' in sys_vendor:
+                            virt_type = 'VMware'
+                        elif 'innotek' in sys_vendor:
+                            virt_type = 'VirtualBox'
+                        elif 'qemu' in sys_vendor:
+                            virt_type = 'QEMU'
+                        elif 'xen' in sys_vendor:
+                            virt_type = 'Xen'
+                        elif 'microsoft' in sys_vendor:
+                            virt_type = 'Hyper-V'
+                        else:
+                            virt_type = 'Unknown'
+                        return (node_type, virt_type)
+            except (FileNotFoundError, IOError):
+                pass
+            
+            # Method 4: Check /proc/cpuinfo for hypervisor flag
+            try:
+                with open('/proc/cpuinfo', 'r') as f:
+                    cpuinfo = f.read().lower()
+                    if 'hypervisor' in cpuinfo:
+                        node_type = 'VM'
+                        # Try to identify the hypervisor
+                        if 'vmware' in cpuinfo:
+                            virt_type = 'VMware'
+                        elif 'kvm' in cpuinfo:
+                            virt_type = 'KVM'
+                        elif 'xen' in cpuinfo:
+                            virt_type = 'Xen'
+                        else:
+                            virt_type = 'Unknown'
+                        return (node_type, virt_type)
+            except (FileNotFoundError, IOError):
+                pass
+                
+        except Exception as e:
+            self.logger.debug(f"Error detecting virtualization: {e}")
+        
+        return (node_type, virt_type)
+    
+    def _get_compute_node_identifier(self) -> Dict[str, Any]:
+        """Get Compute Node identifier information"""
         try:
             # Get hostname
             hostname = socket.gethostname()
@@ -96,20 +198,32 @@ class Neo4JHandler:
             except ImportError:
                 pass
             
+            # Detect virtualization
+            node_type, virtualization_type = self._detect_virtualization()
+            
+            # Get namespace from environment or default
+            namespace = os.environ.get('KUBERNETES_NAMESPACE', os.environ.get('NAMESPACE', 'default'))
+            
             return {
                 'hostname': hostname,
                 'ip_addresses': ip_addresses,
                 'platform': platform.platform(),
                 'python_version': platform.python_version(),
+                'node_type': node_type,
+                'virtualization_type': virtualization_type,
+                'namespace': namespace,
                 'timestamp': datetime.now().isoformat()
             }
         except Exception as e:
-            self.logger.warning(f"Could not get VM identifier: {e}")
+            self.logger.warning(f"Could not get Compute Node identifier: {e}")
             return {
                 'hostname': 'unknown',
                 'ip_addresses': [],
                 'platform': platform.platform(),
                 'python_version': platform.python_version(),
+                'node_type': 'Unknown',
+                'virtualization_type': 'Unknown',
+                'namespace': 'default',
                 'timestamp': datetime.now().isoformat()
             }
     
@@ -149,7 +263,8 @@ class Neo4JHandler:
         """Create Neo4J schema for Kubernetes and Docker monitoring data"""
         schema_queries = [
             # Create indexes for performance
-            "CREATE INDEX vm_id_index IF NOT EXISTS FOR (v:VM) ON (v.id)",
+            "CREATE INDEX compute_node_id_index IF NOT EXISTS FOR (cn:ComputeNode) ON (cn.id)",
+            "CREATE INDEX compute_node_namespace_index IF NOT EXISTS FOR (cn:ComputeNode) ON (cn.namespace)",
             "CREATE INDEX cluster_id_index IF NOT EXISTS FOR (c:Cluster) ON (c.id)",
             "CREATE INDEX node_id_index IF NOT EXISTS FOR (n:Node) ON (n.id)",
             "CREATE INDEX pod_id_index IF NOT EXISTS FOR (p:Pod) ON (p.id)",
@@ -165,7 +280,7 @@ class Neo4JHandler:
             "CREATE INDEX container_user_id_index IF NOT EXISTS FOR (cu:ContainerUser) ON (cu.id)",
             
             # Create constraints for uniqueness
-            "CREATE CONSTRAINT vm_id_unique IF NOT EXISTS FOR (v:VM) REQUIRE v.id IS UNIQUE",
+            "CREATE CONSTRAINT compute_node_id_unique IF NOT EXISTS FOR (cn:ComputeNode) REQUIRE cn.id IS UNIQUE",
             "CREATE CONSTRAINT cluster_id_unique IF NOT EXISTS FOR (c:Cluster) REQUIRE c.id IS UNIQUE",
             "CREATE CONSTRAINT node_id_unique IF NOT EXISTS FOR (n:Node) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT pod_id_unique IF NOT EXISTS FOR (p:Pod) REQUIRE p.id IS UNIQUE",
@@ -214,11 +329,11 @@ class Neo4JHandler:
             with self.driver.session() as session:
                 # Start transaction
                 with session.begin_transaction() as tx:
-                    # Store VM information
-                    vm_id = self._store_vm_info(tx)
+                    # Store Compute Node information
+                    compute_node_id = self._store_compute_node_info(tx)
                     
                     # Store cluster information (including available contexts)
-                    cluster_id = self._store_cluster_info(tx, monitor, context, vm_id, available_contexts)
+                    cluster_id = self._store_cluster_info(tx, monitor, context, compute_node_id, available_contexts)
                     
                     # Store nodes (with actual usage data if available)
                     node_ids = self._store_nodes(tx, monitor, cluster_id, node_metrics_dict)
@@ -248,31 +363,37 @@ class Neo4JHandler:
             self.logger.error(f"Failed to store monitoring data: {e}")
             return False
     
-    def _store_vm_info(self, tx) -> str:
-        """Store VM information and return VM ID"""
-        # Use stable ID based on hostname only (no timestamp to avoid duplicates)
-        vm_id = f"vm_{self.vm_identifier['hostname']}"
+    def _store_compute_node_info(self, tx) -> str:
+        """Store Compute Node information and return Compute Node ID"""
+        # Use stable ID based on hostname and namespace (no timestamp to avoid duplicates)
+        compute_node_id = f"compute_node_{self.compute_node_identifier['hostname']}_{self.compute_node_identifier['namespace']}"
         
         query = """
-        MERGE (v:VM {id: $vm_id})
-        ON CREATE SET v.timestamp = $timestamp
-        SET v.hostname = $hostname,
-            v.ip_addresses = $ip_addresses,
-            v.platform = $platform,
-            v.python_version = $python_version,
-            v.last_updated = datetime()
-        RETURN v.id as vm_id
+        MERGE (cn:ComputeNode {id: $compute_node_id})
+        ON CREATE SET cn.timestamp = $timestamp
+        SET cn.hostname = $hostname,
+            cn.ip_addresses = $ip_addresses,
+            cn.platform = $platform,
+            cn.python_version = $python_version,
+            cn.node_type = $node_type,
+            cn.virtualization_type = $virtualization_type,
+            cn.namespace = $namespace,
+            cn.last_updated = datetime()
+        RETURN cn.id as compute_node_id
         """
         
         result = tx.run(query, 
-                       vm_id=vm_id,
-                       hostname=self.vm_identifier['hostname'],
-                       ip_addresses=self.vm_identifier['ip_addresses'],
-                       platform=self.vm_identifier['platform'],
-                       python_version=self.vm_identifier['python_version'],
-                       timestamp=self.vm_identifier['timestamp'])
+                       compute_node_id=compute_node_id,
+                       hostname=self.compute_node_identifier['hostname'],
+                       ip_addresses=self.compute_node_identifier['ip_addresses'],
+                       platform=self.compute_node_identifier['platform'],
+                       python_version=self.compute_node_identifier['python_version'],
+                       node_type=self.compute_node_identifier['node_type'],
+                       virtualization_type=self.compute_node_identifier['virtualization_type'],
+                       namespace=self.compute_node_identifier['namespace'],
+                       timestamp=self.compute_node_identifier['timestamp'])
         
-        return result.single()['vm_id']
+        return result.single()['compute_node_id']
     
     def _parse_node_metrics(self, node_metrics: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         """Parse node metrics from kubectl top nodes output"""
@@ -386,18 +507,22 @@ class Neo4JHandler:
         except:
             return 0.0
     
-    def _store_cluster_info(self, tx, monitor: KubernetesMonitor, context: str, vm_id: str, available_contexts: List[str]) -> str:
+    def _store_cluster_info(self, tx, monitor: KubernetesMonitor, context: str, compute_node_id: str, available_contexts: List[str]) -> str:
         """Store cluster information and return cluster ID"""
-        cluster_id = f"cluster_{context}_{vm_id}"
+        cluster_id = f"cluster_{context}_{compute_node_id}"
         
         # Get cluster info
         cluster_info = monitor.get_cluster_info()
+        
+        # Get namespace from compute node identifier
+        namespace = self.compute_node_identifier.get('namespace', 'default')
         
         query = """
         MERGE (c:Cluster {id: $cluster_id})
         ON CREATE SET c.timestamp = datetime()
         SET c.context = $context,
-            c.vm_id = $vm_id,
+            c.compute_node_id = $compute_node_id,
+            c.namespace = $namespace,
             c.cluster_info = $cluster_info,
             c.available_contexts = $available_contexts,
             c.last_updated = datetime()
@@ -407,7 +532,8 @@ class Neo4JHandler:
         result = tx.run(query,
                        cluster_id=cluster_id,
                        context=context,
-                       vm_id=vm_id,
+                       compute_node_id=compute_node_id,
+                       namespace=namespace,
                        cluster_info=json.dumps(cluster_info),
                        available_contexts=available_contexts)
         
@@ -640,11 +766,11 @@ class Neo4JHandler:
                            pod_ids: List[str], service_ids: List[str]):
         """Create relationships between entities"""
         
-        # VM -> Cluster relationship
+        # ComputeNode -> Cluster relationship
         tx.run("""
-        MATCH (v:VM), (c:Cluster {id: $cluster_id})
-        WHERE v.id = c.vm_id
-        MERGE (v)-[:HOSTS]->(c)
+        MATCH (cn:ComputeNode), (c:Cluster {id: $cluster_id})
+        WHERE cn.id = c.compute_node_id
+        MERGE (cn)-[:HOSTS]->(c)
         """, cluster_id=cluster_id)
         
         # Cluster -> Nodes relationships
@@ -716,12 +842,12 @@ class Neo4JHandler:
             
             with self.driver.session() as session:
                 with session.begin_transaction() as tx:
-                    # Get or create VM
-                    vm_id = self._store_vm_info(tx)
+                    # Get or create Compute Node
+                    compute_node_id = self._store_compute_node_info(tx)
                     
                     # Store each Docker container and its related data
                     for container_data in containers_data:
-                        container_id = self._store_docker_container(tx, container_data, vm_id)
+                        container_id = self._store_docker_container(tx, container_data, compute_node_id)
                         self._store_processes(tx, container_data, container_id)
                         self._store_network_connections(tx, container_data, container_id)
                         self._store_external_ips(tx, container_data, container_id)
@@ -729,7 +855,7 @@ class Neo4JHandler:
                         self._store_container_users(tx, container_data, container_id)
                     
                     # Create relationships
-                    self._create_docker_relationships(tx, containers_data, vm_id)
+                    self._create_docker_relationships(tx, containers_data, compute_node_id)
                     
                     self.logger.info(f"Successfully stored {len(containers_data)} Docker containers")
                     return True
@@ -738,9 +864,12 @@ class Neo4JHandler:
             self.logger.error(f"Failed to store Docker data: {e}")
             return False
     
-    def _store_docker_container(self, tx, container_data: ContainerSecurityInfo, vm_id: str) -> str:
+    def _store_docker_container(self, tx, container_data: ContainerSecurityInfo, compute_node_id: str) -> str:
         """Store Docker container information"""
-        container_id = f"docker_{container_data.container_id[:12]}_{vm_id}"
+        container_id = f"docker_{container_data.container_id[:12]}_{compute_node_id}"
+        
+        # Get namespace from compute node identifier
+        namespace = self.compute_node_identifier.get('namespace', 'default')
         
         query = """
         MERGE (dc:DockerContainer {id: $container_id})
@@ -749,7 +878,8 @@ class Neo4JHandler:
             dc.container_id = $container_id_full,
             dc.image = $image,
             dc.status = $status,
-            dc.vm_id = $vm_id,
+            dc.compute_node_id = $compute_node_id,
+            dc.namespace = $namespace,
             dc.last_updated = datetime()
         RETURN dc.id as container_id
         """
@@ -760,7 +890,8 @@ class Neo4JHandler:
                        container_id_full=container_data.container_id,
                        image=container_data.image,
                        status=container_data.status,
-                       vm_id=vm_id)
+                       compute_node_id=compute_node_id,
+                       namespace=namespace)
         
         return result.single()['container_id']
     
@@ -831,6 +962,15 @@ class Neo4JHandler:
     def _store_external_ips(self, tx, container_data: ContainerSecurityInfo, container_id: str):
         """Store external IP addresses"""
         for ip in container_data.external_ips:
+            # Validate IP address before storing
+            try:
+                import ipaddress
+                ipaddress.ip_address(ip)
+            except (ValueError, ipaddress.AddressValueError):
+                # Skip invalid IP addresses
+                self.logger.debug(f"Skipping invalid IP address: {ip}")
+                continue
+            
             ip_id = f"ip_{ip}"
             
             query = """
@@ -885,16 +1025,16 @@ class Neo4JHandler:
             
             tx.run(query, user_id=user_id, username=user, container_id=container_id)
     
-    def _create_docker_relationships(self, tx, containers_data: List[ContainerSecurityInfo], vm_id: str):
+    def _create_docker_relationships(self, tx, containers_data: List[ContainerSecurityInfo], compute_node_id: str):
         """Create relationships for Docker containers"""
         for container_data in containers_data:
-            container_id = f"docker_{container_data.container_id[:12]}_{vm_id}"
+            container_id = f"docker_{container_data.container_id[:12]}_{compute_node_id}"
             
-            # VM -> DockerContainer
+            # ComputeNode -> DockerContainer
             tx.run("""
-            MATCH (v:VM {id: $vm_id}), (dc:DockerContainer {id: $container_id})
-            MERGE (v)-[:HOSTS]->(dc)
-            """, vm_id=vm_id, container_id=container_id)
+            MATCH (cn:ComputeNode {id: $compute_node_id}), (dc:DockerContainer {id: $container_id})
+            MERGE (cn)-[:HOSTS]->(dc)
+            """, compute_node_id=compute_node_id, container_id=container_id)
             
             # DockerContainer -> Process
             for process in container_data.processes:
@@ -916,6 +1056,7 @@ class Neo4JHandler:
                 if conn.remote_address and conn.remote_address not in ['*', '0.0.0.0', '::']:
                     try:
                         import ipaddress
+                        # Validate IP address before processing
                         ip = ipaddress.ip_address(conn.remote_address)
                         if not (ip.is_private or ip.is_loopback or ip.is_link_local):
                             ip_id = f"ip_{conn.remote_address}"
@@ -923,7 +1064,10 @@ class Neo4JHandler:
                             MATCH (nc:NetworkConnection {id: $conn_id}), (eip:ExternalIP {id: $ip_id})
                             MERGE (nc)-[:CONNECTS_TO]->(eip)
                             """, conn_id=conn_id, ip_id=ip_id)
-                    except:
+                    except (ValueError, ipaddress.AddressValueError):
+                        # Invalid IP address, skip it
+                        pass
+                    except Exception:
                         pass
             
             # DockerContainer -> OpenPort
@@ -962,39 +1106,40 @@ class Neo4JHandler:
             self.logger.error(f"Query execution failed: {e}")
             return []
     
-    def get_vm_summary(self) -> Dict[str, Any]:
-        """Get summary of all VMs in the database"""
+    def get_compute_node_summary(self) -> Dict[str, Any]:
+        """Get summary of all Compute Nodes in the database"""
         query = """
-        MATCH (v:VM)
-        RETURN v.id as vm_id, v.hostname, v.ip_addresses, v.platform, v.timestamp
-        ORDER BY v.timestamp DESC
+        MATCH (cn:ComputeNode)
+        RETURN cn.id as compute_node_id, cn.hostname, cn.ip_addresses, cn.platform, 
+               cn.node_type, cn.virtualization_type, cn.namespace, cn.timestamp
+        ORDER BY cn.timestamp DESC
         """
         return self.query_data(query)
     
-    def get_cluster_summary(self, vm_id: str = None) -> Dict[str, Any]:
-        """Get summary of clusters for a specific VM or all VMs"""
-        if vm_id:
+    def get_cluster_summary(self, compute_node_id: str = None) -> Dict[str, Any]:
+        """Get summary of clusters for a specific Compute Node or all Compute Nodes"""
+        if compute_node_id:
             query = """
-            MATCH (v:VM {id: $vm_id})-[:HOSTS]->(c:Cluster)
-            RETURN c.id as cluster_id, c.context, c.timestamp
+            MATCH (cn:ComputeNode {id: $compute_node_id})-[:HOSTS]->(c:Cluster)
+            RETURN c.id as cluster_id, c.context, c.namespace, c.timestamp
             ORDER BY c.timestamp DESC
             """
-            return self.query_data(query, {'vm_id': vm_id})
+            return self.query_data(query, {'compute_node_id': compute_node_id})
         else:
             query = """
             MATCH (c:Cluster)
-            RETURN c.id as cluster_id, c.context, c.vm_id, c.timestamp
+            RETURN c.id as cluster_id, c.context, c.compute_node_id, c.namespace, c.timestamp
             ORDER BY c.timestamp DESC
             """
             return self.query_data(query)
     
-    def get_infrastructure_graph(self, vm_id: str = None) -> Dict[str, Any]:
+    def get_infrastructure_graph(self, compute_node_id: str = None) -> Dict[str, Any]:
         """Get complete infrastructure graph for visualization"""
-        if vm_id:
+        if compute_node_id:
             query = """
-            MATCH (v:VM {id: $vm_id})
-            OPTIONAL MATCH (v)-[:HOSTS]->(c:Cluster)
-            OPTIONAL MATCH (v)-[:HOSTS]->(dc:DockerContainer)
+            MATCH (cn:ComputeNode {id: $compute_node_id})
+            OPTIONAL MATCH (cn)-[:HOSTS]->(c:Cluster)
+            OPTIONAL MATCH (cn)-[:HOSTS]->(dc:DockerContainer)
             OPTIONAL MATCH (c)-[:CONTAINS]->(n:Node)
             OPTIONAL MATCH (c)-[:CONTAINS]->(p:Pod)
             OPTIONAL MATCH (c)-[:CONTAINS]->(s:Service)
@@ -1005,14 +1150,14 @@ class Neo4JHandler:
             OPTIONAL MATCH (nc)-[:CONNECTS_TO]->(eip:ExternalIP)
             OPTIONAL MATCH (dc)-[:HAS_OPEN_PORT]->(op:OpenPort)
             OPTIONAL MATCH (dc)-[:HAS_USER]->(cu:ContainerUser)
-            RETURN v, c, dc, n, p, s, ct, pr, nc, eip, op, cu
+            RETURN cn, c, dc, n, p, s, ct, pr, nc, eip, op, cu
             """
-            return self.query_data(query, {'vm_id': vm_id})
+            return self.query_data(query, {'compute_node_id': compute_node_id})
         else:
             query = """
-            MATCH (v:VM)
-            OPTIONAL MATCH (v)-[:HOSTS]->(c:Cluster)
-            OPTIONAL MATCH (v)-[:HOSTS]->(dc:DockerContainer)
+            MATCH (cn:ComputeNode)
+            OPTIONAL MATCH (cn)-[:HOSTS]->(c:Cluster)
+            OPTIONAL MATCH (cn)-[:HOSTS]->(dc:DockerContainer)
             OPTIONAL MATCH (c)-[:CONTAINS]->(n:Node)
             OPTIONAL MATCH (c)-[:CONTAINS]->(p:Pod)
             OPTIONAL MATCH (c)-[:CONTAINS]->(s:Service)
@@ -1023,7 +1168,7 @@ class Neo4JHandler:
             OPTIONAL MATCH (nc)-[:CONNECTS_TO]->(eip:ExternalIP)
             OPTIONAL MATCH (dc)-[:HAS_OPEN_PORT]->(op:OpenPort)
             OPTIONAL MATCH (dc)-[:HAS_USER]->(cu:ContainerUser)
-            RETURN v, c, dc, n, p, s, ct, pr, nc, eip, op, cu
+            RETURN cn, c, dc, n, p, s, ct, pr, nc, eip, op, cu
             """
             return self.query_data(query)
     
@@ -1061,8 +1206,8 @@ def main():
         handler.store_monitoring_data(monitor, "default")
         
         # Example queries
-        print("VM Summary:")
-        print(handler.get_vm_summary())
+        print("Compute Node Summary:")
+        print(handler.get_compute_node_summary())
         
         print("\nCluster Summary:")
         print(handler.get_cluster_summary())

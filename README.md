@@ -1,8 +1,8 @@
 # MoniKube
 
-`Last Updated: 24/11/2025`
+`Last Updated: 2/12/2025`
 
-A comprehensive Kubernetes distributed monitoring tool that monitors all clusters deployed on a VM and collects data, stats, and system metrics.
+A comprehensive Kubernetes distributed monitoring tool that monitors all clusters deployed on compute nodes (VMs or physical machines) and collects data, stats, and system metrics.
 
 ## 🚀 Features
 
@@ -364,7 +364,7 @@ The monitoring system uses structured dataclasses to represent all collected dat
 
 **Data Relationships:**
 - **Kubernetes**: `Cluster` → `Node` → `Pod` → `Container`
-- **Docker**: `VM` → `DockerContainer` → `Process`, `NetworkConnection`, `OpenPort`, `ContainerUser`
+- **Docker**: `ComputeNode` → `DockerContainer` → `Process`, `NetworkConnection`, `OpenPort`, `ContainerUser`
 - **Network**: `NetworkConnection` → `ExternalIP`
 - **Process**: `Process` → `NetworkConnection` (when process info available)
 
